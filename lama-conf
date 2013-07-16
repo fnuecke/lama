@@ -1,4 +1,4 @@
-os.loadAPI("/lama/lama")
+os.loadAPI("/lama")
 
 local tArgs = {...}
 local commands
