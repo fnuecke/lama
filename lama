@@ -287,6 +287,53 @@ function down(tries, aggressive)
     return private.move("down", tries, aggressive)
 end
 
+--[[
+    Moves the turtle to the specified location and turns it to face in the
+    specified direction.
+
+    Note that instead of specifying the coordinates, you can also specify the
+    name of a waypoints. I.e. if the first parameter is a string, it is
+    interpreted as a waypoint, and the turtle will move to that waypoint.
+
+    If the turtle is shut down while moving to the specified target coordinates
+    it will continue moving after booting up again. After it finished moving,
+    either because it reached its target or because it encountered a problem,
+    the remaining startup scripts will be executed and the result of the move
+    command can be queried via lama.startupResult().
+
+    @param x the target X position.
+    @param x the target Y position.
+    @param x the target Z position.
+    @param facing the final facing, after reaching the target position.
+    @return true if the turtle moved successfully, (false, reason) if it failed
+        and stopped somewhere along the way.
+]]
+function move(x, y, z, facing)
+    if state.target then
+        return false, reason.coroutine
+    end
+
+    -- Assume we were given the name of a waypoint if the first argument is of
+    -- type string.
+    if type(x) == "string" then
+        if not hasWaypoint(x) then
+            return false, reason.no_such_waypoint
+        end
+        x, y, z, facing = getWaypoint(x)
+    end
+
+    -- Type checks.
+    assert(type(x) == "number", "'x' must be a number")
+    assert(type(y) == "number", "'y' must be a number")
+    assert(type(z) == "number", "'z' must be a number")
+    assert(facing == nil or type(facing) == "number",
+        "'facing' must be a number or omitted")
+
+    -- Set our new target and start moving.
+    state.target = {x = x, y = y, z = z, f = facing}
+    return private.navigate()
+end
+
 -----------------------------------
 -- Orientation related functions --
 -----------------------------------
@@ -479,56 +526,9 @@ function set(x, y, z, facing)
     return get()
 end
 
-------------------------------------
--- Complex movement and waypoints --
-------------------------------------
-
---[[
-    Moves the turtle to the specified location and turns it to face in the
-    specified direction.
-
-    Note that instead of specifying the coordinates, you can also specify the
-    name of a waypoints. I.e. if the first parameter is a string, it is
-    interpreted as a waypoint, and the turtle will move to that waypoint.
-
-    If the turtle is shut down while moving to the specified target coordinates
-    it will continue moving after booting up again. After it finished moving,
-    either because it reached its target or because it encountered a problem,
-    the remaining startup scripts will be executed and the result of the move
-    command can be queried via lama.startupResult().
-
-    @param x the target X position.
-    @param x the target Y position.
-    @param x the target Z position.
-    @param facing the final facing, after reaching the target position.
-    @return true if the turtle moved successfully, (false, reason) if it failed
-        and stopped somewhere along the way.
-]]
-function move(x, y, z, facing)
-    if state.target then
-        return false, reason.coroutine
-    end
-
-    -- Assume we were given the name of a waypoint if the first argument is of
-    -- type string.
-    if type(x) == "string" then
-        if not hasWaypoint(x) then
-            return false, reason.no_such_waypoint
-        end
-        x, y, z, facing = getWaypoint(x)
-    end
-
-    -- Type checks.
-    assert(type(x) == "number", "'x' must be a number")
-    assert(type(y) == "number", "'y' must be a number")
-    assert(type(z) == "number", "'z' must be a number")
-    assert(facing == nil or type(facing) == "number",
-        "'facing' must be a number or omitted")
-
-    -- Set our new target and start moving.
-    state.target = {x = x, y = y, z = z, f = facing}
-    return private.navigate()
-end
+---------------
+-- Waypoints --
+---------------
 
 --[[
     Adds a new waypoint to the list of known waypoints.
@@ -1279,13 +1279,13 @@ if not lama then
     -- single moves.
     if state.moving then
         -- Here is the trick: if we did complete a move started directly before
-        -- the turtle was shut down (server quit or chunk unload) then we expect
-        -- to have exactly one fuel less than before, since only successful moves
-        -- use up (exactly one) fuel.
+        -- the turtle was shut down (server quit or chunk unload) then we
+        -- expect to have exactly one fuel less than before, since only
+        -- successful moves use up (exactly one) fuel.
         if turtle.getFuelLevel() == state.preMoveFuel then
             -- No fuel was used, so we didn't move. This can only fail if we
-            -- refuel directly after moving, which cannot happen unless its pretty
-            -- much forced using coroutines... so yeah, this will do.
+            -- refuel directly after moving, which cannot happen unless its
+            -- pretty much forced using coroutines... so yeah, this will do.
 
             -- If we have some tries left, continue trying.
             if state.tries > 0 then
@@ -1303,13 +1303,13 @@ if not lama then
                 }
             end
         elseif turtle.getFuelLevel() == state.preMoveFuel - 1 then
-            -- We used one fuel so we made our move! As with the case above, this
-            -- can only be wrong if refueling is involved somewhere, which, again,
-            -- can only happen using coroutines.
+            -- We used one fuel so we made our move! As with the case above,
+            -- this can only be wrong if refueling is involved somewhere,
+            -- which, again, can only happen using coroutines.
             private.updateState(true, true)
         else
-            -- This should not be possible if the API is used correctly, i.e. it
-            -- is not called from multiple coroutines and no other movement
+            -- This should not be possible if the API is used correctly, i.e.
+            -- it is not called from multiple coroutines and no other movement
             -- functions of the turtle are used.
             fs.delete(stateFile)
             error("Unexpected fuel state after reboot, probably invalid API use.")
