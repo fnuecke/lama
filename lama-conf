@@ -78,7 +78,7 @@ commands = {
         name = "list",
         help = "Prints a list of known waypoints.",
         call = function()
-            for name, x, y, z, f in lama.allWaypoints() do
+            for name, x, y, z, f in lama.waypoint.iter() do
                 if f ~= nil then
                     print(string.format("%s (%d, %d, %d, %s)", name, x, y, z, faceName[f + 1]))
                 else
@@ -92,7 +92,7 @@ commands = {
         help = "Adds a new waypoint.",
         call = function()
             local x, y, z, f = parse(3, true)
-            if lama.addWaypoint(tArgs[2], x, y, z, f) then
+            if lama.waypoint.add(tArgs[2], x, y, z, f) then
                 print("Updated waypoint.")
             else
                 print("Added waypoint.")
@@ -103,8 +103,10 @@ commands = {
         name = "remove",
         help = "Removes a waypoint.",
         call = function()
-            if not lama.removeWaypoint(tArgs[2]) then
+            if not lama.waypoint.remove(tArgs[2]) then
                 print("No such waypoint.")
+            else
+                print("Removed waypoint.")
             end
         end
     }

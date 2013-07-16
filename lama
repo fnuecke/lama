@@ -316,10 +316,10 @@ function move(x, y, z, facing)
     -- Assume we were given the name of a waypoint if the first argument is of
     -- type string.
     if type(x) == "string" then
-        if not hasWaypoint(x) then
+        if not waypoint.exists(x) then
             return false, reason.no_such_waypoint
         end
-        x, y, z, facing = getWaypoint(x)
+        x, y, z, facing = waypoint.get(x)
     end
 
     -- Type checks.
@@ -530,6 +530,9 @@ end
 -- Waypoints --
 ---------------
 
+-- Namespace for waypoint related functions.
+waypoint = {}
+
 --[[
     Adds a new waypoint to the list of known waypoints.
 
@@ -541,7 +544,7 @@ end
     @return true if a waypoint of that name already existed and was
         overwritten; false otherwise.
 ]]
-function addWaypoint(name, x, y, z, facing)
+function waypoint.add(name, x, y, z, facing)
     -- Type checking.
     assert(type(name) == "string", "'name' must be a string")
     assert(type(x) == "number", "'x' must be a number")
@@ -550,7 +553,7 @@ function addWaypoint(name, x, y, z, facing)
     assert(facing == nil or type(facing) == "number",
         "'facing' must be a number or omitted")
 
-    local wasOverwritten = hasWaypoint(name)
+    local wasOverwritten = waypoint.exists(name)
     waypoints[name] = {
         x = math.floor(x),
         y = math.floor(y),
@@ -568,8 +571,8 @@ end
     @return true if the waypoint was removed; false if there was no such
         waypoint.
 ]]
-function removeWaypoint(name)
-    if not hasWaypoint(name) then
+function waypoint.remove(name)
+    if not waypoint.exists(name) then
         return false
     end
     waypoints[name] = nil
@@ -583,7 +586,7 @@ end
     @param name the name of the waypoint to test for.
     @return true if a waypoint of that name exists; false otherwise.
 ]]
-function hasWaypoint(name)
+function waypoint.exists(name)
     return waypoints[name] ~= nil
 end
 
@@ -593,8 +596,8 @@ end
     @param the name of the waypoint to get.
     @return (x, y, z, facing) or nil if there is no such waypoint.
 ]]
-function getWaypoint(name)
-    if not hasWaypoint(name) then
+function waypoint.get(name)
+    if not waypoint.exists(name) then
         return nil
     end
     local w = waypoints[name]
@@ -609,7 +612,7 @@ end
 
     @return an iterator over all known waypoints.
 ]]
-function allWaypoints()
+function waypoint.iter()
     local k, v
     return function()
         k, v = next(waypoints, k)
