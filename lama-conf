@@ -1,0 +1,51 @@
+os.loadAPI("lama")
+
+local function usage()
+    print("Usage: lama-conf <command> <args...>")
+    print("Commands:")
+    print("  get")
+    print("    Prints the current position and")
+    print("    facing of the turtle.")
+    print("  set x y z facing")
+    print("    Sets the absolute coordinates the")
+    print("    turtle believes itself to be at.")
+    print("  reset")
+    print("    Alias for 'set 0 0 0 0'.")
+end
+
+local tArgs = {...}
+if #tArgs == 0 then
+    return usage()
+end
+
+local faceName = {"North", "East", "South", "West"}
+if tArgs[1] == "get" then
+    local x, y, z, f = lama.get()
+    print(string.format("X = %d, Y = %d, Z = %d, Facing = %s", x, y, z, faceName[f + 1]))
+elseif tArgs[1] == "set" then
+    local x, y, z, f
+    x = math.floor(tonumber(tArgs[2]))
+    y = math.floor(tonumber(tArgs[3]))
+    z = math.floor(tonumber(tArgs[4]))
+    tArgs[5] = string.lower(tArgs[5])
+    if tArgs[5] == "north" or tArgs[5] == "forward" or tArgs[5] == "0" then
+        f = lama.side.north
+    elseif tArgs[5] == "east" or tArgs[5] == "right" or tArgs[5] == "1" then
+        f = lama.side.east
+    elseif tArgs[5] == "south" or tArgs[5] == "back" or tArgs[5] == "2" then
+        f = lama.side.south
+    elseif tArgs[5] == "west" or tArgs[5] == "left" or tArgs[5] == "3" then
+        f = lama.side.west
+    else
+        print("Invalid facing '" .. tArgs[5] .. "'. Must be one of {north, east, south, west}.")
+        return false
+    end
+
+    x, y, z, f = lama.set(x, y, z, f)
+    print(string.format("X = %d, Y = %d, Z = %d, Facing = %s", x, y, z, faceName[f + 1]))
+elseif tArgs[1] == "reset" then
+    local x, y, z, f = lama.set(0, 0, 0, 0)
+    print(string.format("X = %d, Y = %d, Z = %d, Facing = %s", x, y, z, faceName[f + 1]))
+else
+    usage()
+end
