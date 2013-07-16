@@ -109,7 +109,14 @@ local state = {
     aggressive = false,
     -- The target we're currently moving towards when performing a multi-block
     -- movement (lama.move was called). Format: {x=?, y=?, z=?, f=?}.
-    target = nil
+    target = nil,
+
+    -- This is used to keep track of how many times we tried to wrap the
+    -- startup file in a nested fashion. We need to store this in the
+    -- persistent state in case the API is loaded again (which would reset
+    -- normal variables) and it helps us to check whether we need to unwrap the
+    -- startup file when resuming after a reboot.
+    startupWrapLevel = 0
 }
 
 -- List of registered waypoints.
@@ -520,7 +527,6 @@ function move(x, y, z, facing)
 
     -- Set our new target and start moving.
     state.target = {x = x, y = y, z = z, f = facing}
-    private.save()
     return private.navigate()
 end
 
@@ -747,7 +753,8 @@ function private.load()
                 type(s.target.x) ~= "number" or
                 type(s.target.y) ~= "number" or
                 type(s.target.z) ~= "number" or
-                (s.target.f ~= nil and type(s.target.f) ~= "number")))
+                (s.target.f ~= nil and type(s.target.f) ~= "number"))) or
+           type(s.startupWrapLevel) ~= "number"
         then
             if deleteInvalidStateFiles then
                 print("LAMA: Invalid state file, deleting and ignoring it.")
@@ -866,18 +873,6 @@ if private.startupHandler.init then
     private.startupHandler.init()
 end
 
--- This is used to keep track of how many times we tried to wrap the startup
--- in a nested fashion. This is used so that repeated calls to wrapStartup()
--- do nothing (since it's already wrapped), and a call to unwrapStartup() does
--- nothing if the level is larger than 1 (so that only the level that
--- triggered the original wrapping can perform the actual unwrapping).
--- Concretely this is necessary for the multiblock move logic of lama.move. The
--- private.navigate function wraps the startup to continue moving if it is
--- interrupted while turning, but the normal movement logic (e.g. lama.forward)
--- will also try to wrap the startup. This avoids multiple wrapper files and
--- makes it easier to clean up in the initialization logic.
-private.startupWrapLevel = 0
-
 --[[
     Actual behavior depends on the active handler.
 
@@ -887,12 +882,12 @@ private.startupWrapLevel = 0
     @private
 ]]
 function private.wrapStartup()
-    if private.startupWrapLevel == 0 then
+    if state.startupWrapLevel == 0 then
         if private.startupHandler.wrap then
             private.startupHandler.wrap()
         end
     end
-    private.startupWrapLevel = private.startupWrapLevel + 1
+    state.startupWrapLevel = state.startupWrapLevel + 1
 end
 
 --[[
@@ -905,13 +900,15 @@ end
     @private
 ]]
 function private.unwrapStartup(force)
-    if private.startupWrapLevel == 1 or force then
+    if state.startupWrapLevel == 1 or
+        (force and state.startupWrapLevel > 0)
+    then
         if private.startupHandler.unwrap then
             private.startupHandler.unwrap()
         end
-    end
-    if private.startupWrapLevel > 0 then
-        private.startupWrapLevel = private.startupWrapLevel - 1
+        state.startupWrapLevel = 0
+    elseif state.startupWrapLevel > 0 then
+        state.startupWrapLevel = state.startupWrapLevel - 1
     end
 end
 
@@ -1044,7 +1041,7 @@ function private.move(direction, tries, aggressive)
 
     -- Try to move until we're out of tries (or successful).
     local success
-    while true do
+    repeat
         -- Initialize the move by calling the native function. Store the fuel
         -- level before the command to allow testing for a successful move in
         -- case we are interrupted by a server quit / chunk unload while
@@ -1053,30 +1050,35 @@ function private.move(direction, tries, aggressive)
         local moveId = move()
         if moveId < 0 then
             -- Too many events queued already.
-            state.preMoveFuel = 0
+            private.updateState(false, true)
             return false, reason.queue_full
         end
         state.moving = direction
         state.tries = tries
         state.aggressive = aggressive
-        private.save()
 
-        -- Setup movement resumption via startup file.
+        -- Setup movement resumption via startup file and save state to disk.
         private.wrapStartup()
+        private.save()
 
         -- Wait for movement to finish.
         success = private.waitForResponse(moveId)
-
-        -- Update state and flush it to disk.
-        private.updateState(success, success)
 
         -- Restore startup file after we're done. We do this each time, which
         -- causes a bit more file i/o, but there are way too many sleeps in the
         -- following to guarantee a clean state otherwise.
         private.unwrapStartup()
 
+        -- Update state and flush it to disk.
+        private.updateState(success, success or tries == 0)
+
         -- If something went wrong check whether we should try again.
-        if not success and tries > 0 then
+        if not success then
+            if tries == 0 then
+                -- We're out of tries.
+                break
+            end
+
             -- See what seems to be blocking us.
             if detect and detect() then
                 -- Its a block, see if it's a turtle, otherwise try to hit it.
@@ -1088,10 +1090,12 @@ function private.move(direction, tries, aggressive)
                     os.sleep(2)
                 elseif dig and not dig() and tries == 1 then
                     -- Some block we can't dig, so there's nothing we can do.
+                    private.updateState(false, true)
                     return false, reason.unbreakable_block
                 end
             elseif aggressive and attack and not attack() and tries == 1 then
                 -- Not a block but nothing we can/may attack. Abort.
+                private.updateState(false, true)
                 return false, reason.invulnerable_entity
             else
                 -- We cannot do anything about the obstruction, just wait for a
@@ -1105,11 +1109,8 @@ function private.move(direction, tries, aggressive)
             -- where the turtle would get into a weird state in which it moved
             -- below a dropping sand block, causing bad behavior.
             os.sleep(0.5)
-        else
-            -- We were either successful, or we're out of tries.
-            break
         end
-    end
+    until success
 
     -- Return if we're successful, and when not, for what reason.
     if success then
@@ -1218,6 +1219,10 @@ function private.navigate()
     -- turning) so that we still resume moving.
     private.wrapStartup()
 
+    -- Save state to disk. This is for when we get called via lama.move to
+    -- store the actual target, and for the startup wrap level.
+    private.save()
+
     -- Figure out how far we have to move along each axis.
     local x, y, z = get()
     local dx, dy, dz = state.target.x - x,
@@ -1225,27 +1230,33 @@ function private.navigate()
                        state.target.z - z
 
     -- Then move that distance along each axis.
+    local result, reason
     for axis, distance in pairs({x = dx, y = dy, z = dz}) do
-        local result, reason = travel(axis, distance)
+        result, reason = travel(axis, distance)
         if not result then
-            return result, reason
+            break
         end
     end
 
     -- Finally, adjust our facing.
-    if state.target.f ~= nil then
-        turn(state.target.f)
+    if result and state.target.f ~= nil then
+        result = turn(state.target.f)
+        if not result then
+            reason = reason.queue_full
+        end
     end
 
     -- Clear the state so we don't try to continue moving next startup.
     state.target = nil
-    private.save()
 
     -- Unwrap the startup to restore the previous startup file, if any.
     private.unwrapStartup()
 
-    -- Everything went well.
-    return true
+    -- Save the cleaned up state to disk.
+    private.save()
+
+    -- And we're done.
+    return result, reason
 end
 
 -------------------------------------------------------------------------------
@@ -1258,15 +1269,11 @@ private.load()
 -- Finish any active moves. Only do this on the first API load.
 if not lama then
     -- Make sure any active movement can complete.
-    os.sleep(1) -- Wait a bit so that at least one slot in event queue is free.
+    os.sleep(0.5) -- Wait a bit so that at least one event queue slot is free.
     turtle.detect() -- Process event queue (blocks until processed).
 
-    -- If we're moving or we have a target we definitely wrapped the startup
-    -- file, so unwrap it here (force it -- the unwrap function does nothing
-    -- otherwise, because the API doesn't know the startup file is wrapped).
-    if state.moving or state.target then
-        private.unwrapStartup(true)
-    end
+    -- Force unwrapping if we have at least one level of startup wrapper.
+    private.unwrapStartup(true)
 
     -- Check if we performed a single move and finish any pending multi-try
     -- single moves.
@@ -1282,18 +1289,18 @@ if not lama then
 
             -- If we have some tries left, continue trying.
             if state.tries > 0 then
-                local result, why =
+                local result, reason =
                     private.move(state.moving, state.tries, state.aggressive)
                 private.startupResult = {
                     result = result,
-                    reason = why
+                    reason = reason
                 }
             else
+                private.updateState(false, true)
                 private.startupResult = {
                     result = false,
                     reason = private.tryGetReason(state.moving)
                 }
-                private.updateState(false, true)
             end
         elseif turtle.getFuelLevel() == state.preMoveFuel - 1 then
             -- We used one fuel so we made our move! As with the case above, this
@@ -1324,7 +1331,7 @@ if not lama then
             -- Something went wrong, exit travel mode. We don't have to touch
             -- the startup result, it's obviously already set.
             state.target = nil
-            save()
+            private.save()
         end
     end
 end
