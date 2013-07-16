@@ -1,51 +1,124 @@
-os.loadAPI("lama")
-
-local function usage()
-    print("Usage: lama-conf <command> <args...>")
-    print("Commands:")
-    print("  get")
-    print("    Prints the current position and")
-    print("    facing of the turtle.")
-    print("  set x y z facing")
-    print("    Sets the absolute coordinates the")
-    print("    turtle believes itself to be at.")
-    print("  reset")
-    print("    Alias for 'set 0 0 0 0'.")
-end
+os.loadAPI("/lama/lama")
 
 local tArgs = {...}
-if #tArgs == 0 then
-    return usage()
+local commands
+
+local function parse(start, facingOptional)
+    local x, y, z, f = tArgs[start], tArgs[start + 1], tArgs[start + 2], tArgs[start + 3]
+
+    if x == nil or y == nil or z == nil or (f == nil and not facingOptional) then
+        error("Missing argument.")
+    end
+
+    x = math.floor(tonumber(x))
+    y = math.floor(tonumber(y))
+    z = math.floor(tonumber(z))
+    if f ~= nil then
+        f = string.lower(f)
+        -- Rawget to avoid error on invalid indexing.
+        if rawget(lama.side, f) == nil then
+            error("Invalid facing '" .. f .. "'. Must be one of {north, east, south, west}.")
+        end
+        f = lama.side[f]
+    end
+
+    return x, y, z, f
 end
 
 local faceName = {"North", "East", "South", "West"}
-if tArgs[1] == "get" then
-    local x, y, z, f = lama.get()
+local function display(x, y, z, f)
     print(string.format("X = %d, Y = %d, Z = %d, Facing = %s", x, y, z, faceName[f + 1]))
-elseif tArgs[1] == "set" then
-    local x, y, z, f
-    x = math.floor(tonumber(tArgs[2]))
-    y = math.floor(tonumber(tArgs[3]))
-    z = math.floor(tonumber(tArgs[4]))
-    tArgs[5] = string.lower(tArgs[5])
-    if tArgs[5] == "north" or tArgs[5] == "forward" or tArgs[5] == "0" then
-        f = lama.side.north
-    elseif tArgs[5] == "east" or tArgs[5] == "right" or tArgs[5] == "1" then
-        f = lama.side.east
-    elseif tArgs[5] == "south" or tArgs[5] == "back" or tArgs[5] == "2" then
-        f = lama.side.south
-    elseif tArgs[5] == "west" or tArgs[5] == "left" or tArgs[5] == "3" then
-        f = lama.side.west
-    else
-        print("Invalid facing '" .. tArgs[5] .. "'. Must be one of {north, east, south, west}.")
-        return false
-    end
+end
 
-    x, y, z, f = lama.set(x, y, z, f)
-    print(string.format("X = %d, Y = %d, Z = %d, Facing = %s", x, y, z, faceName[f + 1]))
-elseif tArgs[1] == "reset" then
-    local x, y, z, f = lama.set(0, 0, 0, 0)
-    print(string.format("X = %d, Y = %d, Z = %d, Facing = %s", x, y, z, faceName[f + 1]))
+local function findCommand(name)
+    if name then
+        name = string.lower(name)
+        for _,command in ipairs(commands) do
+            if command.name == name then
+                return command
+            end
+        end
+    end
+    return nil
+end
+
+-- No named keys to keep the order intact.
+commands = {
+    {
+        name = "help",
+        help = "Shows the help text for the specified command.",
+        call = function()
+            local command = findCommand(tArgs[2])
+            if command == nil then
+                print("No such command.")
+            else
+                print(command.help)
+            end
+        end
+    },
+    {
+        name = "get",
+        help = "Prints the current position and facing of the turtle.",
+        call = function() display(lama.get()) end
+    },
+    {
+        name = "set",
+        help = "Sets the absolute coordinates the turtle believes itself to be at.",
+        call = function()
+            local x, y, z, f = parse(2)
+            display(lama.set(x, y, z, f))
+        end
+    },
+    {
+        name = "reset",
+        help = "Alias for 'set 0 0 0 0'.",
+        call = function() display(lama.set(0, 0, 0, 0)) end
+    },
+    {
+        name = "list",
+        help = "Prints a list of known waypoints.",
+        call = function()
+            for name, x, y, z, f in lama.allWaypoints() do
+                if f ~= nil then
+                    print(string.format("%s (%d, %d, %d, %s)", name, x, y, z, faceName[f + 1]))
+                else
+                    print(string.format("%s (%d, %d, %d)", name, x, y, z))
+                end
+            end
+        end
+    },
+    {
+        name = "add",
+        help = "Adds a new waypoint.",
+        call = function()
+            local x, y, z, f = parse(3, true)
+            if lama.addWaypoint(tArgs[2], x, y, z, f) then
+                print("Updated waypoint.")
+            else
+                print("Added waypoint.")
+            end
+        end
+    },
+    {
+        name = "remove",
+        help = "Removes a waypoint.",
+        call = function()
+            if not lama.removeWaypoint(tArgs[2]) then
+                print("No such waypoint.")
+            end
+        end
+    }
+}
+
+local command = findCommand(tArgs[1])
+if #tArgs == 0 or command == nil then
+    print("Usage: lama-conf <command> <args...>")
+    local commandNames = {}
+    for _,v in ipairs(commands) do
+        table.insert(commandNames, v.name)
+    end
+    print("Commands: " .. table.concat(commandNames, ", "))
+    print("Use 'lama-conf help command' to get more information on a specific command.")
 else
-    usage()
+    command.call()
 end

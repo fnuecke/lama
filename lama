@@ -43,16 +43,30 @@
 -- Constants / config                                                        --
 -------------------------------------------------------------------------------
 
+-- The absolute path to this file. This is used for generating startup logic
+-- which initializes the API by loading it into the OS.
+local apiPath = "/lama"
+
 -- This is the name of the file in which we store our state, i.e. the position
 -- and facing of the turtle, as well as whether it is currently moving or not.
 -- You may want to change this if it collides with another program or API.
 local stateFile = "/.lama-state"
+
+-- This is the name of the file in which we store our waypoints. We use a
+-- separate file from the state file, to keep file i/o while moving minimal.
+-- You may want to change this if it collides with another program or API.
+local waypointsFile = "/.lama-waypoints"
 
 -- The filename of the file to backup any original startup file to when
 -- creating the startup file used to finish any running moves in case the
 -- turtle is forced to shut down during the move. This is only used if no
 -- multi-startup-script system is found on the computer.
 local startupBackupFile = "/.lama-startup-backup"
+
+-- If you meddle with the state files by hand you may want to set this to false
+-- to not lose changes. This deletes state files if they fail validation, so
+-- that we don't try to re-parse them over and over again.
+local deleteInvalidStateFiles = true
 
 -------------------------------------------------------------------------------
 -- Environment checking                                                      --
@@ -92,8 +106,15 @@ local state = {
     -- Number of tries left for the current move command.
     tries = 0,
     -- Whether we may attack obstacles when retrying.
-    aggressive = false
+    aggressive = false,
+    -- The target we're currently moving towards when performing a multi-block
+    -- movement (lama.move was called). Format: {x=?, y=?, z=?, f=?}.
+    target = nil
 }
+
+-- List of registered waypoints.
+-- Entry format: [name] = {x=?, y=?, z=?, f=?}
+local waypoints = {}
 
 -- Forward declaration of namespace for local utility methods.
 local private = {}
@@ -103,12 +124,13 @@ local private = {}
 -------------------------------------------------------------------------------
 
 -- The current version of the API.
-version = "1.0"
+version = "1.1"
 
 -- Constants for a turtle's facing, used for turn() and get()/set().
 side = {forward = 0, right = 1, back  = 2, left = 3,
         north   = 0, east  = 1, south = 2, west = 3,
-        front   = 0}
+        front   = 0,
+        ["0"] = 0, ["1"] = 1, ["2"] = 2, ["3"] = 3}
 
 -- Reasons for movement failure. One of these is returned as a second value by
 -- the movement functions (forward, back, up, down) if they fail.
@@ -150,7 +172,11 @@ reason = {
     -- Some invulnerable entity is our way. This can only be determined when we
     -- have multiple tries and we're aggressive, in which case this is returned
     -- if the attack() command fails.
-    invulnerable_entity = "invulnerable_entity"
+    invulnerable_entity = "invulnerable_entity",
+
+    -- Returned by lama.move if the first parameter is a string, and there is
+    -- no known waypoint with that name.
+    no_such_waypoint = "no_such_waypoint"
 }
 
 -- Raise error when trying to access invalid key in the constant tables.
@@ -421,16 +447,152 @@ end
     placing it, to match the actual world coordinates. The facing must be one
     of the lama.side constants.
 
+    @param x the X coordinate to set the position to.
+    @param y the Y coordinate to set the position to.
+    @param z the Z coordinate to set the position to.
+    @param facing the facing to set.
     @return the new position and facing of the turtle (like lama.get()).
 ]]
-function set(x, y, z, f)
+function set(x, y, z, facing)
+    -- Type checks.
+    assert(type(x) == "number", "'x' must be a number")
+    assert(type(y) == "number", "'y' must be a number")
+    assert(type(z) == "number", "'z' must be a number")
+    assert(type(facing) == "number", "'facing' must be a number")
+
     local position = state.position
-    position.x = tonumber(x or position.x)
-    position.y = tonumber(y or position.x)
-    position.z = tonumber(z or position.x)
-    position.f = tonumber(f or position.f) % 4
+    position.x = x
+    position.y = y
+    position.z = z
+    position.f = facing % 4
     private.save()
     return get()
+end
+
+------------------------------------
+-- Complex movement and waypoints --
+------------------------------------
+
+--[[
+    Moves the turtle to the specified location and turns it to face in the
+    specified direction.
+
+    Note that instead of specifying the coordinates, you can also specify the
+    name of a waypoints. I.e. if the first parameter is a string, it is
+    interpreted as a waypoint, and the turtle will move to that waypoint.
+
+    @param x the target X position.
+    @param x the target Y position.
+    @param x the target Z position.
+    @param facing the final facing, after reaching the target position.
+    @return true if the turtle moved successfully, (false, reason) if it failed
+        and stopped somewhere along the way.
+]]
+function move(x, y, z, facing)
+    -- Assume we were given the name of a waypoint if the first argument is of
+    -- type string.
+    if type(x) == "string" then
+        if not hasWaypoint(x) then
+            return false, reason.no_such_waypoint
+        end
+        x, y, z, facing = getWaypoint(x)
+    end
+
+    -- Type checks.
+    assert(type(x) == "number", "'x' must be a number")
+    assert(type(y) == "number", "'y' must be a number")
+    assert(type(z) == "number", "'z' must be a number")
+    assert(type(facing) == "number", "'facing' must be a number")
+
+end
+
+--[[
+    Adds a new waypoint to the list of known waypoints.
+
+    @param name the name of the waypoint.
+    @param x the X coordinate of the waypoint.
+    @param y the Y coordinate of the waypoint.
+    @param z the Z coordinate of the waypoint.
+    @param facing the optional facing of the waypoint.
+    @return true if a waypoint of that name already existed and was
+        overwritten; false otherwise.
+]]
+function addWaypoint(name, x, y, z, facing)
+    -- Type checking.
+    assert(type(name) == "string", "'name' must be a string")
+    assert(type(x) == "number", "'x' must be a number")
+    assert(type(y) == "number", "'y' must be a number")
+    assert(type(z) == "number", "'z' must be a number")
+    assert(facing == nil or type(facing) == "number",
+        "'facing' must be a number or omitted")
+
+    local wasOverwritten = hasWaypoint(name)
+    waypoints[name] = {
+        x = math.floor(x),
+        y = math.floor(y),
+        z = math.floor(z),
+        f = facing and math.floor(facing) or nil
+    }
+    private.saveWaypoints()
+    return wasOverwritten
+end
+
+--[[
+    Removes a waypoint from the list of known waypoints.
+
+    @param name the name of the waypoint to remove.
+    @return true if the waypoint was removed; false if there was no such
+        waypoint.
+]]
+function removeWaypoint(name)
+    if not hasWaypoint(name) then
+        return false
+    end
+    waypoints[name] = nil
+    private.saveWaypoints()
+    return true
+end
+
+--[[
+    Checks if a waypoint with the specified name exists.
+
+    @param name the name of the waypoint to test for.
+    @return true if a waypoint of that name exists; false otherwise.
+]]
+function hasWaypoint(name)
+    return waypoints[name] ~= nil
+end
+
+--[[
+    Get the coordinates of the waypoint with the specified name.
+
+    @param the name of the waypoint to get.
+    @return (x, y, z, facing) or nil if there is no such waypoint.
+]]
+function getWaypoint(name)
+    if not hasWaypoint(name) then
+        return nil
+    end
+    local w = waypoints[name]
+    return w.x, w.y, w.z, w.f
+end
+
+--[[
+    Returns an iterator function to be used in a for loop.
+
+    Usage: for name, x, y, z, facing in lama.waypoints() do ... end
+    Note that the facing may be nil.
+
+    @return an iterator over all known waypoints.
+]]
+function allWaypoints()
+    local k, v
+    return function()
+        k, v = next(waypoints, k)
+        if k then
+            return k, v.x, v.y, v.z, v.f
+        end
+    end
 end
 
 -----------------------
@@ -526,34 +688,88 @@ function private.save()
 end
 
 --[[
-    Restores the position, facing and movement state.
+    Saves the list of known waypoints.
+
+    @private
+]]
+function private.saveWaypoints()
+    -- Serialize before opening the file, just in case.
+    local t = textutils.serialize(waypoints)
+    local f = fs.open(waypointsFile, "w")
+    f.write(t)
+    f.close()
+end
+
+--[[
+    Restores the position, facing and movement state as well as the list of
+    known waypoints.
 
     @private
 ]]
 function private.load()
-    -- If we don't have a state file, we have nothing to do here.
-    if not fs.exists(stateFile) or fs.isDir(stateFile) then
-        return
+    -- Check if we have a state file.
+    if fs.exists(stateFile) and not fs.isDir(stateFile) then
+        local f = fs.open(stateFile, "r")
+        local t = f.readAll()
+        f.close()
+        -- Unserialize after closing the file, just in case.
+        local s = textutils.unserialize(t)
+        -- Validate the read state.
+        if type(s) ~= "table" or
+           type(s.position) ~= "table" or
+           type(s.position.x) ~= "number" or
+           type(s.position.y) ~= "number" or
+           type(s.position.z) ~= "number" or
+           type(s.position.f) ~= "number" or
+           (type(s.moving) ~= "boolean" and type(s.moving) ~= "string") or
+           type(s.preMoveFuel) ~= "number" or
+           type(s.tries) ~= "number"
+        then
+            if deleteInvalidStateFiles then
+                print("LAMA: Invalid state file, deleting and ignoring it.")
+                fs.delete(stateFile)
+            else
+                print("LAMA: Invalid state file, ignoring it.")
+            end
+        else
+            state = s
+        end
     end
-    local f = fs.open(stateFile, "r")
-    local t = f.readLine()
-    f.close()
-    -- Unserialize after closing the file, just in case.
-    local s = textutils.unserialize(t)
-    -- Validate the read state.
-    if not type(s.position) == "table" or
-       not type(s.position.x == "number") or
-       not type(s.position.y == "number") or
-       not type(s.position.z == "number") or
-       not type(s.position.f == "number") or
-       not (type(s.moving) == "boolean" or type(s.moving) == "string") or
-       not type(s.preMoveFuel) == "number" or
-       not type(s.tries) == "number"
-    then
-        print("LAMA: Invalid state file, deleting and ignoring it.")
-        fs.delete(stateFile)
-    else
-        state = s
+    -- Check if we have any waypoints.
+    if fs.exists(waypointsFile) and not fs.isDir(waypointsFile) then
+        local f = fs.open(waypointsFile, "r")
+        local t = f.readAll()
+        f.close()
+        -- Unserialize after closing the file, just in case.
+        local w = textutils.unserialize(t)
+        -- Validate the read list.
+        local function validateWaypoints(list)
+            if type(list) ~= "table" then
+                return false
+            end
+            for k,v in pairs(list) do
+                if type(k) ~= "string" or
+                   type(v) ~= "table" or
+                   v.x == nil or type(v.x) ~= "number" or
+                   v.y == nil or type(v.y) ~= "number" or
+                   v.z == nil or type(v.z) ~= "number" or
+                   (v.f ~= nil and type(v.f) ~= "number") -- Optional.
+                then
+                    return false
+                end
+            end
+            return true
+        end
+        if not validateWaypoints(w) then
+            if deleteInvalidStateFiles then
+                print("LAMA: Invalid waypoint file, deleting and ignoring it.")
+                fs.delete(waypointsFile)
+            else
+                print("LAMA: Invalid waypoint file, ignoring it.")
+            end
+        else
+            waypoints = w
+        end
     end
 end
 
@@ -576,7 +792,7 @@ local startupHandlers = {
             end
 
             local f = fs.open("/startup", "w")
-            f.writeLine("os.loadAPI('lama')")
+            f.writeLine("os.loadAPI('" .. apiPath .. "')")
             if haveStartup then
                 f.writeLine("shell.run('/startup')")
             else
@@ -599,7 +815,7 @@ local startupHandlers = {
             -- Remember whether we already have the startup file for our API.
             if not fs.exists("/init-scripts/00_lama") then
                 local f = fs.open("/init-scripts/00_lama", "w")
-                f.write("os.loadAPI('lama')")
+                f.write("os.loadAPI('" .. apiPath .. "')")
                 f.close()
             end
         end
