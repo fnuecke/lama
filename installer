@@ -1,0 +1,81 @@
+if not http then
+	print("Sorry, I need access to the interwebs to download stuffs.")
+	return
+end
+
+local files = {
+	{
+		name = "lama",
+		url = "https://github.com/fnuecke/lama/raw/master/lama"
+	},
+	{
+		name = "lama-conf",
+		url = "https://github.com/fnuecke/lama/raw/master/lama-conf",
+		ask = true
+	},
+	{
+		name = "lama-example",
+		url = "https://github.com/fnuecke/lama/raw/master/lama-example",
+		ask = true
+	}
+}
+
+local function prompt(success, failure)
+	if type(success) ~= "table" then
+		success = {success}
+	end
+	if type(failure) ~= "table" then
+		failure = {failure}
+	end
+	while true do
+		local event, code = os.pullEvent("key")
+		for _, key in ipairs(success) do
+			if code == key then
+				return true
+			end
+		end
+		for _, key in ipairs(failure) do
+			if code == key then
+				return false
+			end
+		end
+	end
+end
+
+for _, file in ipairs(files) do
+	local install = true
+	if file.ask then
+		print("Do you also wish to install '" .. file.name .. "'? [Y/n]")
+		install = prompt({keys.y, keys.enter}, keys.n)
+	end
+	if install then
+		if fs.exists(file.name) then
+			print("Warning: file '" .. file.name .. "' already exists. Overwrite? [Y/n]")
+			install = prompt({keys.y, keys.enter}, keys.n)
+		end
+	end
+	if install then
+		print("Fetching '" .. file.name .. "'...")
+		local request = http.get(file.url)
+		if request then
+			local response = request.getResponseCode()
+			if response == 200 then
+				local f = fs.open(file.name, "w")
+				f.write(request.readAll())
+				f.close()
+				print("Done.")
+			else
+				print("Oh dear, something went wrong (bad HTTP response code " .. response .. ").")
+				print("Please try again later; sorry for the inconvenience!")
+				break
+			end
+		else
+			print("Oh dear, something went wrong (did not get a request handle).")
+			print("Please try again later; sorry for the inconvenience!")
+			break
+		end
+	end
+end
+
+-- Prevent last key entry to be entered in the shell.
+os.sleep(0.1)

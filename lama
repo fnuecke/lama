@@ -1315,7 +1315,7 @@ if not lama then
             -- it is not called from multiple coroutines and no other movement
             -- functions of the turtle are used.
             fs.delete(stateFile)
-            error("Unexpected fuel state after reboot, probably invalid API use.")
+            error("Unexpected fuel state after reboot; invalid API use?")
         end
     end
 
