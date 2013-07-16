@@ -335,6 +335,9 @@ end
     @see lama.side
 ]]
 function turn(towards)
+    -- Type checks.
+    assert(type(towards) == "number", "'towards' must be a number")
+
     -- Ensure new facing is in bounds.
     towards = towards % 4
     -- Turn towards the target facing.
@@ -481,6 +484,12 @@ end
     name of a waypoints. I.e. if the first parameter is a string, it is
     interpreted as a waypoint, and the turtle will move to that waypoint.
 
+    If the turtle is shut down while moving to the specified target coordinates
+    it will continue moving after booting up again. After it finished moving,
+    either because it reached its target or because it encountered a problem,
+    the remaining startup scripts will be executed and the result of the move
+    command can be queried via lama.startupResult().
+
     @param x the target X position.
     @param x the target Y position.
     @param x the target Z position.
@@ -489,6 +498,10 @@ end
         and stopped somewhere along the way.
 ]]
 function move(x, y, z, facing)
+    if state.target then
+        return false, reason.coroutine
+    end
+
     -- Assume we were given the name of a waypoint if the first argument is of
     -- type string.
     if type(x) == "string" then
@@ -502,8 +515,13 @@ function move(x, y, z, facing)
     assert(type(x) == "number", "'x' must be a number")
     assert(type(y) == "number", "'y' must be a number")
     assert(type(z) == "number", "'z' must be a number")
-    assert(type(facing) == "number", "'facing' must be a number")
+    assert(facing == nil or type(facing) == "number",
+        "'facing' must be a number or omitted")
 
+    -- Set our new target and start moving.
+    state.target = {x = x, y = y, z = z, f = facing}
+    private.save()
+    return private.navigate()
 end
 
 --[[
@@ -723,7 +741,13 @@ function private.load()
            type(s.position.f) ~= "number" or
            (type(s.moving) ~= "boolean" and type(s.moving) ~= "string") or
            type(s.preMoveFuel) ~= "number" or
-           type(s.tries) ~= "number"
+           type(s.tries) ~= "number" or
+           (s.target ~= nil and (
+                type(s.target) ~= "table" or
+                type(s.target.x) ~= "number" or
+                type(s.target.y) ~= "number" or
+                type(s.target.z) ~= "number" or
+                (s.target.f ~= nil and type(s.target.f) ~= "number")))
         then
             if deleteInvalidStateFiles then
                 print("LAMA: Invalid state file, deleting and ignoring it.")
@@ -779,6 +803,12 @@ end
 
 -- List of 'handlers'. This makes it easy to add support for different startup
 -- script implementations (e.g. from different OSs or utility scripts).
+--
+-- The logic works like this: for the active handler 'init' is called once when
+-- the API is loaded. After that, wrap and unwrap are called like so:
+--   move command -> wrap -> actual move -> unwrap
+--   multimove -> wrap -> single moves (nested wraps!) -> unwrap
+--   startup -> unwrap(true)
 local startupHandlers = {
     -- Default implementation creates a wrapper startup script and moves the
     -- original startup script, if any, to a backup location to be restored
@@ -836,39 +866,52 @@ if private.startupHandler.init then
     private.startupHandler.init()
 end
 
---[[
-    Creates a new startup file which initializes this API.
+-- This is used to keep track of how many times we tried to wrap the startup
+-- in a nested fashion. This is used so that repeated calls to wrapStartup()
+-- do nothing (since it's already wrapped), and a call to unwrapStartup() does
+-- nothing if the level is larger than 1 (so that only the level that
+-- triggered the original wrapping can perform the actual unwrapping).
+-- Concretely this is necessary for the multiblock move logic of lama.move. The
+-- private.navigate function wraps the startup to continue moving if it is
+-- interrupted while turning, but the normal movement logic (e.g. lama.forward)
+-- will also try to wrap the startup. This avoids multiple wrapper files and
+-- makes it easier to clean up in the initialization logic.
+private.startupWrapLevel = 0
 
-    Will backup any existing startup file and restore it when the generated
-    startup file is run.
+--[[
+    Actual behavior depends on the active handler.
+
+    This allows for nested calling, where only the first nesting level performs
+    an actual call to the wrap implementation.
 
     @private
 ]]
 function private.wrapStartup()
-    if private.isStartupWrapped then
-        return
+    if private.startupWrapLevel == 0 then
+        if private.startupHandler.wrap then
+            private.startupHandler.wrap()
+        end
     end
-    private.isStartupWrapped = true
-    if private.startupHandler.wrap then
-        private.startupHandler.wrap()
-    end
+    private.startupWrapLevel = private.startupWrapLevel + 1
 end
 
 --[[
-    Removes the startup file used for initializing the API.
+    Actual behavior depends on the active handler.
 
-    Restores the original startup file, if there was any.
+    This allows for nested calling, where only the first nesting level performs
+    an actual call to the unwrap implementation.
 
     @param force whether to force the unwrapping, used in init.
     @private
 ]]
 function private.unwrapStartup(force)
-    if not private.isStartupWrapped and not force then
-        return
+    if private.startupWrapLevel == 1 or force then
+        if private.startupHandler.unwrap then
+            private.startupHandler.unwrap()
+        end
     end
-    private.isStartupWrapped = false
-    if private.startupHandler.unwrap then
-        private.startupHandler.unwrap()
+    if private.startupWrapLevel > 0 then
+        private.startupWrapLevel = private.startupWrapLevel - 1
     end
 end
 
@@ -962,6 +1005,12 @@ end
     @private
 ]]
 function private.move(direction, tries, aggressive)
+    -- Type checks.
+    assert(tries == nil or type(tries) == "number",
+        "'tries' must be a number or omitted")
+    assert(aggressive == nil or type(aggressive) == "boolean",
+        "'aggressive' must be a boolean or omitted")
+
     -- Check our fuel.
     if turtle.getFuelLevel() < 1 then
         return false, reason.fuel
@@ -1005,7 +1054,6 @@ function private.move(direction, tries, aggressive)
         if moveId < 0 then
             -- Too many events queued already.
             state.preMoveFuel = 0
-            private.unwrapStartup()
             return false, reason.queue_full
         end
         state.moving = direction
@@ -1022,6 +1070,11 @@ function private.move(direction, tries, aggressive)
         -- Update state and flush it to disk.
         private.updateState(success, success)
 
+        -- Restore startup file after we're done. We do this each time, which
+        -- causes a bit more file i/o, but there are way too many sleeps in the
+        -- following to guarantee a clean state otherwise.
+        private.unwrapStartup()
+
         -- If something went wrong check whether we should try again.
         if not success and tries > 0 then
             -- See what seems to be blocking us.
@@ -1035,12 +1088,10 @@ function private.move(direction, tries, aggressive)
                     os.sleep(2)
                 elseif dig and not dig() and tries == 1 then
                     -- Some block we can't dig, so there's nothing we can do.
-                    private.unwrapStartup()
                     return false, reason.unbreakable_block
                 end
             elseif aggressive and attack and not attack() and tries == 1 then
                 -- Not a block but nothing we can/may attack. Abort.
-                private.unwrapStartup()
                 return false, reason.invulnerable_entity
             else
                 -- We cannot do anything about the obstruction, just wait for a
@@ -1059,9 +1110,6 @@ function private.move(direction, tries, aggressive)
             break
         end
     end
-
-    -- Restore startup file after we're done.
-    private.unwrapStartup()
 
     -- Return if we're successful, and when not, for what reason.
     if success then
@@ -1122,6 +1170,84 @@ function private.updateState(success, finish)
     private.save()
 end
 
+--[[
+    Makes a turtle move to the position currently set as the target.
+
+    @return true if the turtle successfully reached the target; (false, reason)
+        otherwise.
+]]
+function private.navigate()
+    -- Utility function for moving a specified distance along a single axis.
+    local function travel(axis, distance)
+        -- If we make no moves along this axis we can skip the rest.
+        if distance == 0 then
+            return true
+        end
+
+        -- Turn to face the axis if necessary, in a way that we can move
+        -- forwards (we don't want to move backwards because we cannot dig or
+        -- attack when moving backwards). This is unnecessary for the z axis,
+        -- because facing doesn't matter there.
+        local directions = ({
+            x = {side.north, side.south},
+            y = {side.east, side.west}})[axis]
+        if directions then
+            local direction = distance > 0 and directions[1] or directions[2]
+            turn(direction)
+        end
+
+        -- Move in the appropriate direction as often as necessary.
+        local action = ({
+            x = forward,
+            y = forward,
+            z = distance > 0 and up or down})[axis]
+        distance = math.abs(distance)
+        while distance > 0 do
+            local result, reason = action(5) -- Try up to 5 times.
+            if not result then
+                return result, reason
+            end
+            distance = distance - 1
+        end
+
+        -- All green.
+        return true
+    end
+
+    -- Wrap startup in case we break down while not actually moving (e.g. while
+    -- turning) so that we still resume moving.
+    private.wrapStartup()
+
+    -- Figure out how far we have to move along each axis.
+    local x, y, z = get()
+    local dx, dy, dz = state.target.x - x,
+                       state.target.y - y,
+                       state.target.z - z
+
+    -- Then move that distance along each axis.
+    for axis, distance in pairs({x = dx, y = dy, z = dz}) do
+        local result, reason = travel(axis, distance)
+        if not result then
+            return result, reason
+        end
+    end
+
+    -- Finally, adjust our facing.
+    if state.target.f ~= nil then
+        turn(state.target.f)
+    end
+
+    -- Clear the state so we don't try to continue moving next startup.
+    state.target = nil
+    private.save()
+
+    -- Unwrap the startup to restore the previous startup file, if any.
+    private.unwrapStartup()
+
+    -- Everything went well.
+    return true
+end
+
 -------------------------------------------------------------------------------
 -- Initialization                                                            --
 -------------------------------------------------------------------------------
@@ -1130,46 +1256,75 @@ end
 private.load()
 
 -- Finish any active moves. Only do this on the first API load.
-if not lama and state.moving then
+if not lama then
     -- Make sure any active movement can complete.
     os.sleep(1) -- Wait a bit so that at least one slot in event queue is free.
     turtle.detect() -- Process event queue (blocks until processed).
-    private.unwrapStartup(true)
 
-    -- Here is the trick: if we did complete a move started directly before
-    -- the turtle was shut down (server quit or chunk unload) then we expect
-    -- to have exactly one fuel less than before, since only successful moves
-    -- use up (exactly one) fuel.
-    if turtle.getFuelLevel() == state.preMoveFuel then
-        -- No fuel was used, so we didn't move. This can only fail if we
-        -- refuel directly after moving, which cannot happen unless its pretty
-        -- much forced using coroutines... so yeah, this will do.
+    -- If we're moving or we have a target we definitely wrapped the startup
+    -- file, so unwrap it here (force it -- the unwrap function does nothing
+    -- otherwise, because the API doesn't know the startup file is wrapped).
+    if state.moving or state.target then
+        private.unwrapStartup(true)
+    end
 
-        -- If we have some tries left, continue trying.
-        if state.tries > 0 then
-            local result, why =
-                private.move(state.moving, state.tries, state.aggressive)
-            private.startupResult = {
-                result = result,
-                reason = why
-            }
+    -- Check if we performed a single move and finish any pending multi-try
+    -- single moves.
+    if state.moving then
+        -- Here is the trick: if we did complete a move started directly before
+        -- the turtle was shut down (server quit or chunk unload) then we expect
+        -- to have exactly one fuel less than before, since only successful moves
+        -- use up (exactly one) fuel.
+        if turtle.getFuelLevel() == state.preMoveFuel then
+            -- No fuel was used, so we didn't move. This can only fail if we
+            -- refuel directly after moving, which cannot happen unless its pretty
+            -- much forced using coroutines... so yeah, this will do.
+
+            -- If we have some tries left, continue trying.
+            if state.tries > 0 then
+                local result, why =
+                    private.move(state.moving, state.tries, state.aggressive)
+                private.startupResult = {
+                    result = result,
+                    reason = why
+                }
+            else
+                private.startupResult = {
+                    result = false,
+                    reason = private.tryGetReason(state.moving)
+                }
+                private.updateState(false, true)
+            end
+        elseif turtle.getFuelLevel() == state.preMoveFuel - 1 then
+            -- We used one fuel so we made our move! As with the case above, this
+            -- can only be wrong if refueling is involved somewhere, which, again,
+            -- can only happen using coroutines.
+            private.updateState(true, true)
         else
-            private.startupResult = {
-                result = false,
-                reason = private.tryGetReason(state.moving)
-            }
-            private.updateState(false, true)
+            -- This should not be possible if the API is used correctly, i.e. it
+            -- is not called from multiple coroutines and no other movement
+            -- functions of the turtle are used.
+            fs.delete(stateFile)
+            error("Unexpected fuel state after reboot, probably invalid API use.")
         end
-    elseif turtle.getFuelLevel() == state.preMoveFuel - 1 then
-        -- We used one fuel so we made our move! As with the case above, this
-        -- can only be wrong if refueling is involved somewhere, which, again,
-        -- can only happen using coroutines.
-        private.updateState(true, true)
-    else
-        -- This should not be possible if the API is used correctly, i.e. it
-        -- is not called from multiple coroutines and no other movement
-        -- functions of the turtle are used.
-        fs.delete(stateFile)
-        error("Unexpected fuel state after reboot, probably invalid API use.")
+    end
+
+    -- If we're currently traveling towards a target location, continue doing
+    -- so after resolving possibly active single moves above.
+    if state.target then
+        -- See if the previous move was successful. This isn't *really*
+        -- necessary, because we could just try to continue moving, which would
+        -- then result in the same failure, again. But we can avoid repeating
+        -- work, so let's do it like this.
+        local result, reason = startupResult()
+        if result then
+            -- Everything is still OK, continue moving.
+            private.navigate()
+        else
+            -- Something went wrong, exit travel mode. We don't have to touch
+            -- the startup result, it's obviously already set.
+            state.target = nil
+            save()
+        end
     end
 end
