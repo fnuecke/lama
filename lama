@@ -51,11 +51,13 @@ local apiPath = "/lama"
 -- and facing of the turtle, as well as whether it is currently moving or not.
 -- We split this up into several files to keep file i/o while moving minimal.
 -- You may want to change this if it collides with another program or API.
-local stateFile = "/.lama-state"
-local wrapFile = "/.lama-wrap-state"
-local moveFile = "/.lama-move-state"
-local pathFile = "/.lama-path-state"
-local waypointsFile = "/.lama-waypoints"
+local stateFile = {
+    general = "/.lama-state",
+    wrap = "/.lama-wrap-state",
+    move = "/.lama-move-state",
+    path = "/.lama-path-state",
+    waypoints = "/.lama-waypoints"
+}
 
 -- The filename of the file to backup any original startup file to when
 -- creating the startup file used to finish any running moves in case the
@@ -234,7 +236,7 @@ function set(x, y, z, facing)
     position.y = y
     position.z = z
     position.f = facing % 4
-    private.save(state.general)
+    private.save("general")
     return get()
 end
 
@@ -431,7 +433,7 @@ function navigate(path, tries, aggressive)
         tries = tries or 0,
         aggressive = aggressive or false
     }
-    private.save(state.path)
+    private.save("path")
     return private.navigate()
 end
 
@@ -448,7 +450,7 @@ function turnRight()
     local id = turtle.native.turnRight()
     if id >= 0 then
         state.general.position.f = (state.general.position.f + 1) % 4
-        private.save(state.general)
+        private.save("general")
         return private.waitForResponse(id)
     end
     return false
@@ -463,7 +465,7 @@ function turnLeft()
     local id = turtle.native.turnLeft()
     if id >= 0 then
         state.general.position.f = (state.general.position.f - 1) % 4
-        private.save(state.general)
+        private.save("general")
         return private.waitForResponse(id)
     end
     return false
@@ -522,7 +524,7 @@ function turn(towards)
                 return false
             end
         end
-        private.save(state.general)
+        private.save("general")
         table.insert(ids, id)
     end
     return private.waitForResponse(ids)
@@ -577,7 +579,7 @@ function waypoint.add(name, x, y, z, facing)
         z = math.floor(z),
         f = facing and math.floor(facing) or nil
     }
-    private.save(state.waypoints)
+    private.save("waypoints")
     return wasOverwritten
 end
 
@@ -593,7 +595,7 @@ function waypoint.remove(name)
         return false
     end
     state.waypoints[name] = nil
-    private.save(state.waypoints)
+    private.save("waypoints")
     return true
 end
 
@@ -788,7 +790,7 @@ state = {
     -- persistent state in case the API is loaded again (which would reset
     -- normal variables) and it helps us to check whether we need to unwrap
     -- the startup file when resuming after a reboot.
-    startupWrapLevel = 0,
+    wrap = 0,
 
     -- The current movement state, i.e. the direction we're moving in, the fuel
     -- level before the move started, the remaining tries and whether we're
@@ -821,7 +823,7 @@ private.schema.general = {
         }
     }
 }
-private.schema.startupWrapLevel = {type = "number"}
+private.schema.wrap = {type = "number"}
 private.schema.move = {
     type = "table",
     optional = true,
@@ -966,24 +968,9 @@ end
     @private
 ]]
 function private.save(what)
-    local filename
-    if what == state.general then
-        filename = stateFile
-    elseif what == state.startupWrapLevel then
-        -- Note to self: this only works as long it remains the only integer.
-        filename = wrapFile
-    elseif what == state.move then
-        filename = moveFile
-    elseif what == state.path then
-        filename = pathFile
-    elseif what == state.waypoints then
-        filename = waypointsFile
-    else
-        error("you found a bug")
-    end
     -- Serialize before opening the file, just in case.
-    local data = textutils.serialize(what)
-    local file = fs.open(filename, "w")
+    local data = textutils.serialize(state[what])
+    local file = fs.open(stateFile[what], "w")
     file.write(data)
     file.close()
 end
@@ -1027,16 +1014,9 @@ function private.load()
     end
 
     -- Read all state sections one by one.
-    state.general =
-        load(stateFile, private.schema.general, state.general)
-    state.startupWrapLevel =
-        load(wrapFile, private.schema.startupWrapLevel, state.startupWrapLevel)
-    state.move =
-        load(moveFile, private.schema.move, state.move)
-    state.path =
-        load(pathFile, private.schema.path, state.path)
-    state.waypoints =
-        load(waypointsFile, private.schema.waypoints, state.waypoints)
+    for section, filename in pairs(stateFile) do
+        state[section] = load(filename, private.schema[section], state[section])
+    end
 end
 
 -------------------------------------------------------------------------------
@@ -1117,13 +1097,13 @@ end
     @private
 ]]
 function private.wrapStartup()
-    if state.startupWrapLevel == 0 then
+    if state.wrap == 0 then
         if private.startupHandler.wrap then
             private.startupHandler.wrap()
         end
     end
-    state.startupWrapLevel = state.startupWrapLevel + 1
-    private.save(state.startupWrapLevel)
+    state.wrap = state.wrap + 1
+    private.save("wrap")
 end
 
 --[[
@@ -1136,17 +1116,17 @@ end
     @private
 ]]
 function private.unwrapStartup(force)
-    if state.startupWrapLevel == 1 or
-        (force and state.startupWrapLevel > 0)
+    if state.wrap == 1 or
+        (force and state.wrap > 0)
     then
         if private.startupHandler.unwrap then
             private.startupHandler.unwrap()
         end
-        state.startupWrapLevel = 0
-        fs.delete(wrapFile)
-    elseif state.startupWrapLevel > 0 then
-        state.startupWrapLevel = state.startupWrapLevel - 1
-        private.save(state.startupWrapLevel)
+        state.wrap = 0
+        fs.delete(stateFile.wrap)
+    elseif state.wrap > 0 then
+        state.wrap = state.wrap - 1
+        private.save("wrap")
     end
 end
 
@@ -1297,7 +1277,7 @@ function private.move(direction, tries, aggressive)
             tries = tries,
             aggressive = aggressive
         }
-        private.save(state.move)
+        private.save("move")
 
         -- Setup movement resumption via startup file and save state to disk.
         private.wrapStartup()
@@ -1405,7 +1385,7 @@ function private.updateState()
     position.z = position.z + delta[direction][3]
 
     -- Save new state.
-    private.save(state.general)
+    private.save("general")
 end
 
 --[[
@@ -1417,7 +1397,7 @@ end
 ]]
 function private.endMove()
     state.move = nil
-    fs.delete(moveFile)
+    fs.delete(stateFile.move)
 end
 
 --[[
@@ -1499,7 +1479,7 @@ function private.navigate()
 
         -- Done, we reached this waypoint so we can remove it from the list.
         table.remove(state.path.steps, 1)
-        private.save(state.path)
+        private.save("path")
     until not result or #state.path.steps == 0
 
     -- Clear the state so we don't try to continue moving next startup.
@@ -1521,7 +1501,7 @@ end
 ]]
 function private.endNavigate()
     state.path = nil
-    fs.delete(pathFile)
+    fs.delete(stateFile.path)
 end
 
 -------------------------------------------------------------------------------
@@ -1542,6 +1522,11 @@ end
 -- turtle moved after it was forcibly shut down.
 if turtle.getFuelLevel() == "unlimited" then
     error("Turtles must use fuel for this API to work correctly.")
+end
+
+-- Make sure the apiPath variable is plausible.
+if not fs.exists(apiPath) or fs.isDir(apiPath) then
+    error("No file found at 'apiPath', please make sure it points to the API.")
 end
 
 -------------------------------------------------------------------------------
@@ -1602,7 +1587,10 @@ if not lama then
             -- This should not be possible if the API is used correctly, i.e.
             -- it is not called from multiple coroutines and no other movement
             -- functions of the turtle are used.
-            fs.delete(stateFile)
+            fs.delete(stateFile.general)
+            fs.delete(stateFile.wrap)
+            fs.delete(stateFile.move)
+            fs.delete(stateFile.path)
             error("Unexpected fuel state after reboot; invalid API use?")
         end
     end
