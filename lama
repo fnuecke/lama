@@ -40,7 +40,7 @@
 ]]
 
 -------------------------------------------------------------------------------
--- Constants / config                                                        --
+-- Config                                                                    --
 -------------------------------------------------------------------------------
 
 -- The absolute path to this file. This is used for generating startup logic
@@ -71,67 +71,17 @@ local startupBackupFile = "/.lama-startup-backup"
 local deleteInvalidStateFiles = true
 
 -------------------------------------------------------------------------------
--- Environment checking                                                      --
+-------------------------------------------------------------------------------
+-- API variables and methods follow; do not change them.                     --
+-------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
 
--- This API makes no sense when used on anything other than a turtle.
-if not turtle then
-    error("Can only run on turtles.")
-end
-
--- Check if this computer has a label. Because if it hasn't this is pointless.
-if not os.getComputerLabel() then
-    error("Turtle has no label, required for state persistence.")
-end
-
--- Check if turtles use fuel. If they don't, we cannot reliably check if the
--- turtle moved after it was forcibly shut down.
-if turtle.getFuelLevel() == "unlimited" then
-    error("Turtles must use fuel for this API to work correctly.")
-end
+-- Internal forward declarations. They have to be declared here so that
+-- functions can access them.
+local state, waypoints, private
 
 -------------------------------------------------------------------------------
--- Internal state variable and forward declarations for utility functions    --
--------------------------------------------------------------------------------
-
--- We keep all of the state in a common table for easier serialization.
-local state = {
-    -- Coordinates and facing.
-    position = {x = 0, y = 0, z = 0, f = 0},
-    -- Whether we're currently moving.
-    moving = false,
-    -- Only relevant if moving is not false, in which case it's the fuel level
-    -- from before triggering the move. This is used to check if we actually
-    -- moved in case the turtle is forcibly shut down during the move (due to
-    -- the server quitting or the chunk unloading, for example).
-    preMoveFuel = 0,
-    -- Number of tries left for the current move command.
-    tries = 0,
-    -- Whether we may attack obstacles when retrying.
-    aggressive = false,
-
-    -- The target we're currently moving towards when performing a multi-block
-    -- movement (lama.move was called).
-    -- Format: {x=?, y=?, z=?, f=?, tries=?, aggressive=?}.
-    target = nil,
-
-    -- This is used to keep track of how many times we tried to wrap the
-    -- startup file in a nested fashion. We need to store this in the
-    -- persistent state in case the API is loaded again (which would reset
-    -- normal variables) and it helps us to check whether we need to unwrap the
-    -- startup file when resuming after a reboot.
-    startupWrapLevel = 0
-}
-
--- List of registered waypoints.
--- Entry format: [name] = {x=?, y=?, z=?, f=?}
-local waypoints = {}
-
--- Forward declaration of namespace for local utility methods.
-local private = {}
-
--------------------------------------------------------------------------------
--- API                                                                       --
+-- Constants                                                                 --
 -------------------------------------------------------------------------------
 
 -- The current version of the API.
@@ -141,7 +91,7 @@ version = "1.1"
 side = {forward = 0, right = 1, back  = 2, left = 3,
         north   = 0, east  = 1, south = 2, west = 3,
         front   = 0,
-        ["0"] = 0, ["1"] = 1, ["2"] = 2, ["3"] = 3}
+        ["0"]   = 0, ["1"] = 1, ["2"] = 2, ["3"] = 3}
 
 -- Reasons for movement failure. One of these is returned as a second value by
 -- the movement functions (forward, back, up, down) if they fail.
@@ -183,256 +133,8 @@ reason = {
     -- Some invulnerable entity is our way. This can only be determined when we
     -- have multiple tries and we're aggressive, in which case this is returned
     -- if the attack() command fails.
-    invulnerable_entity = "invulnerable_entity",
-
-    -- Returned by lama.move if the first parameter is a string, and there is
-    -- no known waypoint with that name.
-    no_such_waypoint = "no_such_waypoint"
+    invulnerable_entity = "invulnerable_entity"
 }
-
--- Raise error when trying to access invalid key in the constant tables.
-setmetatable(side, {
-    __index = function(t,k)
-        error("Trying to access invalid 'side' constant '" .. k .. "'.")
-    end,
-    __newindex = function()
-        error("Trying to modify readonly table.")
-        -- Yes, existing entries can be overwritten like this, but I prefer to
-        -- keep the table enumerable via pairs.
-    end
-})
-setmetatable(reason, {
-    __index = function(t,k)
-        error("Trying to access invalid 'reason' constant '" .. k .. "'.")
-    end,
-    __newindex = function()
-        error("Trying to modify readonly table.")
-        -- Yes, existing entries can be overwritten like this, but I prefer to
-        -- keep the table enumerable via pairs.
-    end
-})
-
---------------------------------
--- Movement related functions --
---------------------------------
-
---[[
-    Try to move the turtle forward.
-
-    @param tries how often to try to move. If this larger than zero, the turtle
-        will try to dig its way through any obstructions as many times (e.g. to
-        get through stacks of sand or gravel).
-    @param aggressive if set to true, will also try to attack to clear its way
-        when obstructed.
-    @return true if the turtle moved successfully, (false, reason) if it failed
-        and is still in the same position.
-]]
-function forward(tries, aggressive)
-    if state.moving then
-        return false, reason.coroutine
-    end
-    return private.move("forward", tries, aggressive)
-end
-
---[[
-    Try to move the turtle backward.
-
-    Note that this does not have the 'tries' and 'aggressive' parameters, since
-    the turtle would have to turn around first in order to dig or attack.
-
-    @param tries how often to try to move. If this larger than zero, the turtle
-        will try to wait for any obstructions it hits to go away as many times.
-        As opposed to the other movement functions this will not dig nor attack
-        and only wait for other turtle to pass. In the other cases it will
-        immediately return false.
-    @return true if the turtle moved successfully, (false, reason) if it failed
-        and is still in the same position.
-]]
-function back(tries)
-    if state.moving then
-        return false, reason.coroutine
-    end
-    return private.move("back", tries)
-end
-
---[[
-    Try to move the turtle up.
-
-    @param tries how often to try to move. If this larger than zero, the turtle
-        will try to dig its way through any obstructions as many times (e.g. to
-        get through stacks of sand or gravel).
-    @param aggressive if set to true, will also try to attack to clear its way
-        when obstructed.
-    @return true if the turtle moved successfully, (false, reason) if it failed
-        and is still in the same position.
-]]
-function up(tries, aggressive)
-    if state.moving then
-        return false, reason.coroutine
-    end
-    return private.move("up", tries, aggressive)
-end
-
---[[
-    Try to move the turtle down.
-
-    @param tries how often to try to move. If this larger than zero, the turtle
-        will try to dig its way through any obstructions as many times (e.g. to
-        get through stacks of sand or gravel).
-    @param aggressive if set to true, will also try to attack to clear its way
-        when obstructed.
-    @return true if the turtle moved successfully, (false, reason) if it failed
-        and is still in the same position.
-]]
-function down(tries, aggressive)
-    if state.moving then
-        return false, reason.coroutine
-    end
-    return private.move("down", tries, aggressive)
-end
-
---[[
-    Moves the turtle to the specified location and turns it to face in the
-    specified direction.
-
-    If the turtle is shut down while moving to the specified target coordinates
-    it will continue moving after booting up again. After it finished moving,
-    either because it reached its target or because it encountered a problem,
-    the remaining startup scripts will be executed and the result of the move
-    command can be queried via lama.startupResult().
-
-    @param x the target X position.
-    @param x the target Y position.
-    @param x the target Z position.
-    @param facing the final facing, after reaching the target position.
-    @param tries how often to try to move for each single move. If this larger
-        than zero, the turtle will try to dig its way through any obstructions
-        as many times (e.g. to get through stacks of sand or gravel).
-    @param aggressive if set to true, will also try to attack to clear its way
-        when obstructed.
-    @return true if the turtle moved successfully, (false, reason) if it failed
-        and stopped somewhere along the way.
-]]
-function goto(x, y, z, facing, tries, aggressive)
-    if state.target then
-        return false, reason.coroutine
-    end
-
-    -- Type checks.
-    assert(type(x) == "number", "'x' must be a number")
-    assert(type(y) == "number", "'y' must be a number")
-    assert(type(z) == "number", "'z' must be a number")
-    assert(facing == nil or type(facing) == "number",
-        "'facing' must be a number or omitted")
-    assert(tries == nil or type(tries) == "number",
-        "'tries' must be a number or omitted")
-    assert(aggressive == nil or type(aggressive) == "boolean",
-        "'aggressive' must be a boolean or omitted")
-
-    -- Set our new target and start moving.
-    state.target = {
-        x = x,
-        y = y,
-        z = z,
-        f = facing,
-        tries = tries or 0,
-        aggressive = aggressive or false
-    }
-    return private.navigate()
-end
-
------------------------------------
--- Orientation related functions --
------------------------------------
-
---[[
-    Turn the turtle right.
-
-    @return true if the turtle turned successfully, false otherwise.
-]]
-function turnRight()
-    local id = turtle.native.turnRight()
-    if id >= 0 then
-        state.position.f = (state.position.f + 1) % 4
-        private.save()
-        return private.waitForResponse(id)
-    end
-    return false
-end
-
---[[
-    Turn the turtle left.
-
-    @return true if the turtle turned successfully, false otherwise.
-]]
-function turnLeft()
-    local id = turtle.native.turnLeft()
-    if id >= 0 then
-        state.position.f = (state.position.f - 1) % 4
-        private.save()
-        return private.waitForResponse(id)
-    end
-    return false
-end
-
---[[
-    Turn the turtle around.
-
-    @return true if the turtle turned successfully, (false, reason) if it
-        failed - in this case the turtle may also have turned around halfway.
-        Only fails if the event queue is full.
-]]
-function turnAround()
-    return turn(state.position.f + 2)
-end
-
---[[
-    Turn the turtle to face the specified direction.
-
-    @param towards the direction in which the turtle should face.
-    @return true if the turtle turned successfully, (false, reason) if it
-        failed - in this case the turtle may already have turned partially
-        towards the specified facing. Only fails if the event queue is full.
-    @see lama.side
-]]
-function turn(towards)
-    -- Type checks.
-    assert(type(towards) == "number", "'towards' must be a number")
-
-    -- Ensure new facing is in bounds.
-    towards = towards % 4
-    -- Turn towards the target facing.
-    local ids = {}
-    while state.position.f ~= towards do
-        -- We do not use the turnLeft() and turnRight() functions, because we
-        -- want full control: we push all native events in one go and then wait
-        -- for all of them to finish. This way we can stick to the pattern of
-        -- immediately returning (non-yielding) if the turn fails due to a full
-        -- event queue.
-        local id
-        if towards == (state.position.f + 1) % 4 then
-            -- Special case for turning clockwise, to avoid turning three times
-            -- when once is enough, in particular for the left -> forward case,
-            -- where we wrap around (from 3 -> 0).
-            id = turtle.native.turnRight()
-            if id >= 0 then
-                state.position.f = (state.position.f + 1) % 4
-            else
-                return false
-            end
-        else
-            id = turtle.native.turnLeft()
-            if id >= 0 then
-                state.position.f = (state.position.f - 1) % 4
-            else
-                return false
-            end
-        end
-        private.save()
-        table.insert(ids, id)
-    end
-    return private.waitForResponse(ids)
-end
 
 -----------------------------
 -- State related functions --
@@ -533,6 +235,296 @@ function set(x, y, z, facing)
     return get()
 end
 
+--------------------------------
+-- Movement related functions --
+--------------------------------
+
+--[[
+    Try to move the turtle forward.
+
+    @param tries how often to try to move. If this larger than zero, the turtle
+        will try to dig its way through any obstructions as many times (e.g. to
+        get through stacks of sand or gravel).
+    @param aggressive if set to true, will also try to attack to clear its way
+        when obstructed.
+    @return true if the turtle moved successfully, (false, reason) if it failed
+        and is still in the same position.
+]]
+function forward(tries, aggressive)
+    if state.moving then
+        return false, reason.coroutine
+    end
+    return private.move("forward", tries, aggressive)
+end
+
+--[[
+    Try to move the turtle backward.
+
+    Note that this does not have the 'tries' and 'aggressive' parameters, since
+    the turtle would have to turn around first in order to dig or attack.
+
+    @param tries how often to try to move. If this larger than zero, the turtle
+        will try to wait for any obstructions it hits to go away as many times.
+        As opposed to the other movement functions this will not dig nor attack
+        and only wait for other turtle to pass. In the other cases it will
+        immediately return false.
+    @return true if the turtle moved successfully, (false, reason) if it failed
+        and is still in the same position.
+]]
+function back(tries)
+    if state.moving then
+        return false, reason.coroutine
+    end
+    return private.move("back", tries)
+end
+
+--[[
+    Try to move the turtle up.
+
+    @param tries how often to try to move. If this larger than zero, the turtle
+        will try to dig its way through any obstructions as many times (e.g. to
+        get through stacks of sand or gravel).
+    @param aggressive if set to true, will also try to attack to clear its way
+        when obstructed.
+    @return true if the turtle moved successfully, (false, reason) if it failed
+        and is still in the same position.
+]]
+function up(tries, aggressive)
+    if state.moving then
+        return false, reason.coroutine
+    end
+    return private.move("up", tries, aggressive)
+end
+
+--[[
+    Try to move the turtle down.
+
+    @param tries how often to try to move. If this larger than zero, the turtle
+        will try to dig its way through any obstructions as many times (e.g. to
+        get through stacks of sand or gravel).
+    @param aggressive if set to true, will also try to attack to clear its way
+        when obstructed.
+    @return true if the turtle moved successfully, (false, reason) if it failed
+        and is still in the same position.
+]]
+function down(tries, aggressive)
+    if state.moving then
+        return false, reason.coroutine
+    end
+    return private.move("down", tries, aggressive)
+end
+
+--[[
+    Moves the turtle to the specified location and turns it to face in the
+    specified direction if any.
+
+    If the turtle is shut down while moving to the specified target coordinates
+    it will continue moving after booting up again. After it finished moving,
+    either because it reached its target or because it encountered a problem,
+    the remaining startup scripts will be executed and the result of the move
+    command can be queried via lama.startupResult().
+
+    This is actually just a shortcut for
+        lama.navigate({x, y, z, facing}, tries, aggressive)
+
+    @param x the target X position.
+    @param x the target Y position.
+    @param x the target Z position.
+    @param facing the final facing, after reaching the target position. This
+        parameter is options; if omitted the turtle will remain in the
+        orientation it arrived in.
+    @param tries how often to try to move for each single move. If this larger
+        than zero, the turtle will try to dig its way through any obstructions
+        as many times (e.g. to get through stacks of sand or gravel).
+    @param aggressive if set to true, will also try to attack to clear its way
+        when obstructed.
+    @return true if the turtle moved successfully, (false, reason) if it failed
+        and stopped somewhere along the way.
+]]
+function goto(x, y, z, facing, tries, aggressive)
+    return navigate({{x = x, y = y, z = z, facing = facing}}, tries, aggressive)
+end
+
+--[[
+    Moves the turtle along the specified path.
+
+    Each path entry can either be a waypoint or a set of coordinates. Note that
+    waypoints are resolved once in the beginning, so if a waypoint is changed
+    asynchronously (e.g. coroutine or interrupted due to forced shut down) that
+    change will not influence how the turtle will move.
+
+    If the turtle is shut down while moving along the specified path it will
+    continue moving after booting up again. After it finished moving, either
+    because it reached its final target or because it encountered a problem,
+    the remaining startup scripts will be executed and the result of the move
+    command can be queried via lama.startupResult().
+
+    Note that all facings for intermediate steps will be ignored, only the
+    facing in the final waypoint will be applied after the turtle arrived.
+
+    @param path the list of coordinates or waypoints to move along. Note that
+        only array entries are considered (i.e. with a numerical key) because
+        record entries (arbitrary key) have no guaranteed order.
+    @param tries how often to try to move for each single move. If this larger
+        than zero, the turtle will try to dig its way through any obstructions
+        as many times (e.g. to get through stacks of sand or gravel).
+    @param aggressive if set to true, will also try to attack to clear its way
+        when obstructed.
+    @return true if the turtle moved successfully, (false, reason) if it failed
+        and stopped somewhere along the way.
+    @throw if the path contains an unknown waypoint or an invalid entry.
+]]
+function navigate(path, tries, aggressive)
+    if state.path then
+        return false, reason.coroutine
+    end
+
+    -- Type checks.
+    assert(tries == nil or type(tries) == "number",
+        "'tries' must be a number or omitted")
+    assert(aggressive == nil or type(aggressive) == "boolean",
+        "'aggressive' must be a boolean or omitted")
+
+    -- Resolve path to be all absolute and validate coordinates.
+    local absPath = {}
+    for k,v in ipairs(path) do
+        if type(v) == "string" then
+            -- It's a waypoint. Add the coordinate to the list.
+            local x, y, z, f = waypoint.get(v)
+            table.insert(absPath, {x = x, y = y, z = z, f = f})
+        elseif type(v) == "table" then
+            -- It's a coordinate. Do some type checking.
+            local x, y, z, f = v.x, v.y, v.z, v.facing
+            assert(type(x) == "number",
+                "'x' at index " .. k .. " must be a number")
+            assert(type(y) == "number",
+                "'y' at index " .. k .. " must be a number")
+            assert(type(z) == "number",
+                "'z' at index " .. k .. " must be a number")
+            assert(f == nil or type(f) == "number",
+                "'facing' at index " .. k .. " must be a number or omitted")
+
+            -- Add the coordinate to the list.
+            table.insert(absPath, {x = x, y = y, z = z, f = f})
+        else
+            error("invalid path entry at index " .. k)
+        end
+    end
+
+    -- If we have no steps at all we can stop right here.
+    if #absPath == 0 then
+        return true
+    end
+
+    -- Strip facings for all except the last entry (because those don't matter
+    -- and will only slow us down).
+    for i = 1, #absPath - 1 do
+        absPath[i].f = nil
+    end
+
+    -- Set our new target and start moving. The state will be saved for us by
+    -- the private.navigate() function so we can skip it here.
+    state.path = {
+        steps = absPath,
+        tries = tries or 0,
+        aggressive = aggressive or false
+    }
+    return private.navigate()
+end
+
+-----------------------------------
+-- Orientation related functions --
+-----------------------------------
+
+--[[
+    Turn the turtle right.
+
+    @return true if the turtle turned successfully, false otherwise.
+]]
+function turnRight()
+    local id = turtle.native.turnRight()
+    if id >= 0 then
+        state.position.f = (state.position.f + 1) % 4
+        private.save()
+        return private.waitForResponse(id)
+    end
+    return false
+end
+
+--[[
+    Turn the turtle left.
+
+    @return true if the turtle turned successfully, false otherwise.
+]]
+function turnLeft()
+    local id = turtle.native.turnLeft()
+    if id >= 0 then
+        state.position.f = (state.position.f - 1) % 4
+        private.save()
+        return private.waitForResponse(id)
+    end
+    return false
+end
+
+--[[
+    Turn the turtle around.
+
+    @return true if the turtle turned successfully, (false, reason) if it
+        failed - in this case the turtle may also have turned around halfway.
+        Only fails if the event queue is full.
+]]
+function turnAround()
+    return turn(state.position.f + 2)
+end
+
+--[[
+    Turn the turtle to face the specified direction.
+
+    @param towards the direction in which the turtle should face.
+    @return true if the turtle turned successfully, (false, reason) if it
+        failed - in this case the turtle may already have turned partially
+        towards the specified facing. Only fails if the event queue is full.
+    @see lama.side
+]]
+function turn(towards)
+    -- Type checks.
+    assert(type(towards) == "number", "'towards' must be a number")
+
+    -- Ensure new facing is in bounds.
+    towards = towards % 4
+    -- Turn towards the target facing.
+    local ids = {}
+    while state.position.f ~= towards do
+        -- We do not use the turnLeft() and turnRight() functions, because we
+        -- want full control: we push all native events in one go and then wait
+        -- for all of them to finish. This way we can stick to the pattern of
+        -- immediately returning (non-yielding) if the turn fails due to a full
+        -- event queue.
+        local id
+        if towards == (state.position.f + 1) % 4 then
+            -- Special case for turning clockwise, to avoid turning three times
+            -- when once is enough, in particular for the left -> forward case,
+            -- where we wrap around (from 3 -> 0).
+            id = turtle.native.turnRight()
+            if id >= 0 then
+                state.position.f = (state.position.f + 1) % 4
+            else
+                return false
+            end
+        else
+            id = turtle.native.turnLeft()
+            if id >= 0 then
+                state.position.f = (state.position.f - 1) % 4
+            else
+                return false
+            end
+        end
+        private.save()
+        table.insert(ids, id)
+    end
+    return private.waitForResponse(ids)
+end
+
 ---------------
 -- Waypoints --
 ---------------
@@ -616,11 +608,11 @@ end
 
     @param the name of the waypoint to get.
     @return (x, y, z, facing) or nil if there is no such waypoint.
+    @throw if there is no waypoint with the specified name.
 ]]
 function waypoint.get(name)
-    if not waypoint.exists(name) then
-        return nil
-    end
+    assert(waypoint.exists(name),
+        "no such waypoint, '" .. tostring(name) .. "'")
     local w = waypoints[name]
     return w.x, w.y, w.z, w.f
 end
@@ -628,17 +620,17 @@ end
 --[[
     Returns an iterator function to be used in a for loop.
 
-    Usage: for name, x, y, z, facing in lama.waypoints() do ... end
+    Usage: for name, x, y, z, facing in lama.waypoint.iter() do ... end
     Note that the facing may be nil.
 
     @return an iterator over all known waypoints.
 ]]
 function waypoint.iter()
-    local k, v
+    local name, coordinate
     return function()
-        k, v = next(waypoints, k)
-        if k then
-            return k, v.x, v.y, v.z, v.f
+        name, coordinate = next(waypoints, name)
+        if name then
+            return name, coordinate.x, coordinate.y, coordinate.z, coordinate.f
         end
     end
 end
@@ -652,6 +644,9 @@ end
     the remaining startup scripts will be executed and the result of the move
     command can be queried via lama.startupResult().
 
+    This just calls lama.goto() with the waypoint's coordinates, which in turn
+    is an alias for lama.navigate() for single length paths.
+
     @param name the name of the waypoint to move to.
     @param tries how often to try to move for each single move. If this larger
         than zero, the turtle will try to dig its way through any obstructions
@@ -660,11 +655,9 @@ end
         when obstructed.
     @return true if the turtle moved successfully, (false, reason) if it failed
         and stopped somewhere along the way.
+    @throw if there is no waypoint with the specified name.
 ]]
 function waypoint.goto(name, tries, aggressive)
-    if not waypoint.exists(name) then
-        return false, reason.no_such_waypoint
-    end
     x, y, z, facing = waypoint.get(name)
     return goto(x, y, z, facing, tries, aggressive)
 end
@@ -745,6 +738,206 @@ function hijackTurtleAPI(restore)
 end
 
 -------------------------------------------------------------------------------
+-------------------------------------------------------------------------------
+-- Internal methods follow; you cannot call these, so you can probably stop  --
+-- reading right here, unless you're interested in implementation details.   --
+-------------------------------------------------------------------------------
+-------------------------------------------------------------------------------
+
+-- Raise error when trying to access invalid key in the constant tables. This
+-- is meant to make it easier to track down typos.
+setmetatable(side, {
+    __index = function(t,k)
+        error("Trying to access invalid 'side' constant '" .. k .. "'.")
+    end,
+    __newindex = function()
+        error("Trying to modify readonly table.")
+        -- Yes, existing entries can be overwritten like this, but I prefer to
+        -- keep the table enumerable via pairs().
+    end
+})
+setmetatable(reason, {
+    __index = function(t,k)
+        error("Trying to access invalid 'reason' constant '" .. k .. "'.")
+    end,
+    __newindex = function()
+        error("Trying to modify readonly table.")
+        -- Yes, existing entries can be overwritten like this, but I prefer to
+        -- keep the table enumerable via pairs().
+    end
+})
+
+-- Namespace for private functions.
+private = {}
+
+-- Initialize state variable with defaults.
+state = {
+    -- Coordinates and facing.
+    position = {x = 0, y = 0, z = 0, f = 0},
+    -- Whether we're currently moving.
+    moving = false,
+    -- Only relevant if moving is not false, in which case it's the fuel level
+    -- from before triggering the move. This is used to check if we actually
+    -- moved in case the turtle is forcibly shut down during the move (due to
+    -- the server quitting or the chunk unloading, for example).
+    preMoveFuel = 0,
+    -- Number of tries left for the current move command.
+    tries = 0,
+    -- Whether we may attack obstacles when retrying.
+    aggressive = false,
+
+    -- The path we're currently moving along when performing a multi-block
+    -- movement (lama.navigate or lama.goto/lama.waypoint.goto was called).
+    -- Format: {steps={{x=?, y=?, z=?, f=?}, ...}, tries=?, aggressive=?}.
+    path = nil,
+
+    -- This is used to keep track of how many times we tried to wrap the
+    -- startup file in a nested fashion. We need to store this in the
+    -- persistent state in case the API is loaded again (which would reset
+    -- normal variables) and it helps us to check whether we need to unwrap the
+    -- startup file when resuming after a reboot.
+    startupWrapLevel = 0
+}
+
+-- Schema for the state variable.
+private.stateSchema = {
+    type = "table",
+    properties = {
+        position = {
+            type = "table",
+            properties = {
+                x = {type = "number"},
+                y = {type = "number"},
+                z = {type = "number"},
+                f = {type = "number"}
+            }
+        },
+        moving = {type = {"boolean", "string"}},
+        tries = {type = "number"},
+        path = {
+            type = "table",
+            optional = true,
+            properties = {
+                steps = {
+                    type = "table",
+                    entries = {
+                        type = "table",
+                        properties = {
+                            x = {type = "number"},
+                            y = {type = "number"},
+                            z = {type = "number"},
+                            f = {type = "number", optional = true}
+                        }
+                    }
+                },
+                tries = {type = "number"},
+                aggressive = {type = "boolean"}
+            }
+        },
+        startupWrapLevel = {type = "number"}
+    }
+}
+
+-- List of registered waypoints.
+waypoints = {}
+
+-- Schema for the waypoints variable.
+private.waypointSchema = {
+    type = "table",
+    entries = {
+        type = "table",
+        keytype = "string",
+        properties = {
+            x = {type = "number"},
+            y = {type = "number"},
+            z = {type = "number"},
+            f = {type = "number", optional = true}
+        }
+    }
+}
+
+-------------------------------------------------------------------------------
+-- Schema based value validation                                             --
+-------------------------------------------------------------------------------
+
+--[[
+    Validates a value based on a schema.
+
+    This checks if the value fits the specified schema (i.e. types are correct)
+    which is used when loading states, to avoid loading a corrupted state.
+
+    @param value the value to validate.
+    @param schema the schema to use to validate the value.
+    @return true if the value fits the schema; (false, reason) otherwise.
+    @private
+]]
+function private.validate(value, schema)
+    assert(schema ~= nil, "no schema given")
+    local function validate(value, schema, path)
+        -- Is the value optional? We do this first because we still want to return
+        -- false if the type mismatches if the value is optional but not nil.
+        if schema.optional and value == nil then
+            return true
+        end
+
+        -- Is the value type correct?
+        if type(schema.type) == "table" then
+            -- Value may have multiple types, check if any one fits.
+            local ok = false
+            for _,valueType in pairs(schema.type) do
+                if type(value) == valueType then
+                    ok = true
+                    break
+                end
+            end
+            if not ok then
+                return false, path .. ": invalid type; is " .. type(value) ..
+                    ", should be one of [" ..
+                    table.concat(schema.type, ", ") .. "]"
+            end
+        elseif schema.type and type(value) ~= schema.type then
+            return false, path .. ": invalid type; is " .. type(value) ..
+                ", should be " .. schema.type
+        end
+
+        -- Recursively check properties of the value.
+        if schema.properties then
+            for property, propertySchema in pairs(schema.properties) do
+                local result, location = validate(value[property],
+                                                  propertySchema,
+                                                  path .. "." .. property)
+                if not result then
+                    return result, location
+                end
+            end
+        end
+
+        -- Recursively check entries of a table.
+        if schema.entries then
+            for key, entry in pairs(value) do
+                if schema.entries.keytype and
+                   type(key) ~= schema.entries.keytype
+                then
+                    return false, path .. "[" .. key ..
+                        "]: invalid key type; is " .. type(key) ..
+                        ", should be " .. schema.entries.keytype
+                end
+                local result, location = validate(entry,
+                                                  schema.entries,
+                                                  path .. "[" .. key .. "]")
+                if not result then
+                    return result, location
+                end
+            end
+        end
+
+        -- No issues.
+        return true
+    end
+    return validate(value, schema, "value")
+end
+
+-------------------------------------------------------------------------------
 -- State saving/loading                                                      --
 -------------------------------------------------------------------------------
 
@@ -781,79 +974,39 @@ end
     @private
 ]]
 function private.load()
-    -- Check if we have a state file.
-    if fs.exists(stateFile) and not fs.isDir(stateFile) then
-        local f = fs.open(stateFile, "r")
+    local function load(file, schema, default)
+        -- Check if the file even exists.
+        if not fs.exists(file) or fs.isDir(file) then
+            return default
+        end
+        local f = fs.open(file, "r")
         local t = f.readAll()
         f.close()
-        -- Unserialize after closing the file, just in case.
-        local s = textutils.unserialize(t)
-        -- Validate the read state.
-        if type(s) ~= "table" or
-           type(s.position) ~= "table" or
-           type(s.position.x) ~= "number" or
-           type(s.position.y) ~= "number" or
-           type(s.position.z) ~= "number" or
-           type(s.position.f) ~= "number" or
-           (type(s.moving) ~= "boolean" and type(s.moving) ~= "string") or
-           type(s.preMoveFuel) ~= "number" or
-           type(s.tries) ~= "number" or
-           (s.target ~= nil and (
-                type(s.target) ~= "table" or
-                type(s.target.x) ~= "number" or
-                type(s.target.y) ~= "number" or
-                type(s.target.z) ~= "number" or
-                (s.target.f ~= nil and type(s.target.f) ~= "number") or
-                type(s.target.tries) ~= "number" or
-                type(s.target.aggressive) ~= "boolean")) or
-           type(s.startupWrapLevel) ~= "number"
-        then
+
+        -- Unserialize after closing the file, just in case. I don't fully
+        -- trust CC Lua's GC in this regard because I had to actually close MC
+        -- once or twice because some files stayed locked even though I already
+        -- returned to the menu.
+        local v = textutils.unserialize(t)
+
+        -- Validate the read value.
+        local result, reason = private.validate(v, schema)
+        if not result then
             if deleteInvalidStateFiles then
-                print("LAMA: Invalid state file, deleting and ignoring it.")
+                print("LAMA: Invalid file '" .. file ..
+                    "' (" .. reason .. "), deleting and ignoring it.")
                 fs.delete(stateFile)
             else
-                print("LAMA: Invalid state file, ignoring it.")
+                print("LAMA: Invalid file '" .. file ..
+                    "' (" .. reason .. "), ignoring it.")
             end
         else
-            state = s
+            return v
         end
+        return default
     end
-    -- Check if we have any waypoints.
-    if fs.exists(waypointsFile) and not fs.isDir(waypointsFile) then
-        local f = fs.open(waypointsFile, "r")
-        local t = f.readAll()
-        f.close()
-        -- Unserialize after closing the file, just in case.
-        local w = textutils.unserialize(t)
-        -- Validate the read list.
-        local function validateWaypoints(list)
-            if type(list) ~= "table" then
-                return false
-            end
-            for k,v in pairs(list) do
-                if type(k) ~= "string" or
-                   type(v) ~= "table" or
-                   v.x == nil or type(v.x) ~= "number" or
-                   v.y == nil or type(v.y) ~= "number" or
-                   v.z == nil or type(v.z) ~= "number" or
-                   (v.f ~= nil and type(v.f) ~= "number") -- Optional.
-                then
-                    return false
-                end
-            end
-            return true
-        end
-        if not validateWaypoints(w) then
-            if deleteInvalidStateFiles then
-                print("LAMA: Invalid waypoint file, deleting and ignoring it.")
-                fs.delete(waypointsFile)
-            else
-                print("LAMA: Invalid waypoint file, ignoring it.")
-            end
-        else
-            waypoints = w
-        end
-    end
+    state = load(stateFile, private.stateSchema, state)
+    waypoints = load(waypointsFile, private.waypointSchema, waypoints)
 end
 
 -------------------------------------------------------------------------------
@@ -1230,6 +1383,10 @@ end
         otherwise.
 ]]
 function private.navigate()
+    -- Validate state. This function should only be called when the list of
+    -- steps is not empty; if it is it's a bug.
+    assert(#state.path.steps > 0, "you found a bug")
+
     -- Utility function for moving a specified distance along a single axis.
     local function travel(axis, distance)
         -- If we make no moves along this axis we can skip the rest.
@@ -1255,7 +1412,7 @@ function private.navigate()
             y = forward,
             z = distance > 0 and up or down})[axis]
         distance = math.abs(distance)
-        local tries, aggressive = state.target.tries, state.target.aggressive
+        local tries, aggressive = state.path.tries, state.path.aggressive
         while distance > 0 do
             local result, reason = action(tries, aggressive)
             if not result then
@@ -1276,31 +1433,36 @@ function private.navigate()
     -- store the actual target, and for the startup wrap level.
     private.save()
 
-    -- Figure out how far we have to move along each axis.
-    local x, y, z = get()
-    local dx, dy, dz = state.target.x - x,
-                       state.target.y - y,
-                       state.target.z - z
-
-    -- Then move that distance along each axis.
+    -- Process all remaining waypoints.
     local result, reason
-    for axis, distance in pairs({x = dx, y = dy, z = dz}) do
-        result, reason = travel(axis, distance)
-        if not result then
-            break
-        end
-    end
+    repeat
+        -- Figure out how far we have to move along each axis.
+        local x, y, z = get()
+        local step = state.path.steps[1]
+        local dx, dy, dz = step.x - x, step.y - y, step.z - z
 
-    -- Finally, adjust our facing.
-    if result and state.target.f ~= nil then
-        result = turn(state.target.f)
-        if not result then
-            reason = reason.queue_full
+        -- Then move that distance along each axis.
+        for axis, distance in pairs({x = dx, y = dy, z = dz}) do
+            result, reason = travel(axis, distance)
+            if not result then
+                break
+            end
         end
-    end
+
+        -- Finally, adjust our facing.
+        if result and step.f ~= nil then
+            result = turn(step.f)
+            if not result then
+                reason = reason.queue_full
+            end
+        end
+
+        -- Done, we reached this waypoint so we can remove it from the list.
+        table.remove(state.path.steps, 1)
+    until not result or #state.path.steps == 0
 
     -- Clear the state so we don't try to continue moving next startup.
-    state.target = nil
+    state.path = nil
 
     -- Unwrap the startup to restore the previous startup file, if any.
     private.unwrapStartup()
@@ -1310,6 +1472,26 @@ function private.navigate()
 
     -- And we're done.
     return result, reason
+end
+
+-------------------------------------------------------------------------------
+-- Environment checking                                                      --
+-------------------------------------------------------------------------------
+
+-- This API makes no sense when used on anything other than a turtle.
+if not turtle then
+    error("Can only run on turtles.")
+end
+
+-- Check if this computer has a label. Because if it hasn't this is pointless.
+if not os.getComputerLabel() then
+    error("Turtle has no label, required for state persistence.")
+end
+
+-- Check if turtles use fuel. If they don't, we cannot reliably check if the
+-- turtle moved after it was forcibly shut down.
+if turtle.getFuelLevel() == "unlimited" then
+    error("Turtles must use fuel for this API to work correctly.")
 end
 
 -------------------------------------------------------------------------------
@@ -1371,7 +1553,7 @@ if not lama then
 
     -- If we're currently traveling towards a target location, continue doing
     -- so after resolving possibly active single moves above.
-    if state.target then
+    if state.path then
         -- See if the previous move was successful. This isn't *really*
         -- necessary, because we could just try to continue moving, which would
         -- then result in the same failure, again. But we can avoid repeating
@@ -1383,7 +1565,7 @@ if not lama then
         else
             -- Something went wrong, exit travel mode. We don't have to touch
             -- the startup result, it's obviously already set.
-            state.target = nil
+            state.path = nil
             private.save()
         end
     end
