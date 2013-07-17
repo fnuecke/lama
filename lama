@@ -48,14 +48,13 @@
 local apiPath = "/lama"
 
 -- This is the name of the file in which we store our state, i.e. the position
--- and facing of the turtle, as well as whether it is currently moving or not,
--- as well as some other state information.
+-- and facing of the turtle, as well as whether it is currently moving or not.
+-- We split this up into several files to keep file i/o while moving minimal.
 -- You may want to change this if it collides with another program or API.
 local stateFile = "/.lama-state"
-
--- This is the name of the file in which we store our waypoints. We use a
--- separate file from the state file, to keep file i/o while moving minimal.
--- You may want to change this if it collides with another program or API.
+local wrapFile = "/.lama-wrap-state"
+local moveFile = "/.lama-move-state"
+local pathFile = "/.lama-path-state"
 local waypointsFile = "/.lama-waypoints"
 
 -- The filename of the file to backup any original startup file to when
@@ -78,7 +77,7 @@ local deleteInvalidStateFiles = true
 
 -- Internal forward declarations. They have to be declared here so that
 -- functions can access them.
-local state, waypoints, private
+local state, private
 
 -------------------------------------------------------------------------------
 -- Constants                                                                 --
@@ -155,7 +154,7 @@ Note: all coordinates are initially relative to the turtle's origin,
     @return a tuple (x, y, z, facing).
 ]]
 function get()
-    local position = state.position
+    local position = state.general.position
     return position.x, position.y, position.z, position.f
 end
 
@@ -165,7 +164,7 @@ end
     @return the turtle's current X position.
 ]]
 function getX()
-    return state.position.x
+    return state.general.position.x
 end
 
 --[[
@@ -174,7 +173,7 @@ end
     @return the turtle's current Y position.
 ]]
 function getY()
-    return state.position.y
+    return state.general.position.y
 end
 
 --[[
@@ -183,7 +182,7 @@ end
     @return the turtle's current Z position.
 ]]
 function getZ()
-    return state.position.z
+    return state.general.position.z
 end
 
 --[[
@@ -192,7 +191,7 @@ end
     @return a vector instance representing the turtle's position.
 ]]
 function getPosition()
-    local position = state.position
+    local position = state.general.position
     return vector.new(position.x, position.y, position.z)
 end
 
@@ -203,7 +202,7 @@ end
     @see lama.side
 ]]
 function getFacing()
-    return state.position.f
+    return state.general.position.f
 end
 
 --[[
@@ -220,18 +219,22 @@ end
     @return the new position and facing of the turtle (like lama.get()).
 ]]
 function set(x, y, z, facing)
+    if state.move or state.path then
+        error("cannot set position while moving")
+    end
+
     -- Type checks.
     assert(type(x) == "number", "'x' must be a number")
     assert(type(y) == "number", "'y' must be a number")
     assert(type(z) == "number", "'z' must be a number")
     assert(type(facing) == "number", "'facing' must be a number")
 
-    local position = state.position
+    local position = state.general.position
     position.x = x
     position.y = y
     position.z = z
     position.f = facing % 4
-    private.save()
+    private.save(state.general)
     return get()
 end
 
@@ -422,13 +425,13 @@ function navigate(path, tries, aggressive)
         absPath[i].f = nil
     end
 
-    -- Set our new target and start moving. The state will be saved for us by
-    -- the private.navigate() function so we can skip it here.
+    -- Set our new target and start moving.
     state.path = {
         steps = absPath,
         tries = tries or 0,
         aggressive = aggressive or false
     }
+    private.save(state.path)
     return private.navigate()
 end
 
@@ -444,8 +447,8 @@ end
 function turnRight()
     local id = turtle.native.turnRight()
     if id >= 0 then
-        state.position.f = (state.position.f + 1) % 4
-        private.save()
+        state.general.position.f = (state.general.position.f + 1) % 4
+        private.save(state.general)
         return private.waitForResponse(id)
     end
     return false
@@ -459,8 +462,8 @@ end
 function turnLeft()
     local id = turtle.native.turnLeft()
     if id >= 0 then
-        state.position.f = (state.position.f - 1) % 4
-        private.save()
+        state.general.position.f = (state.general.position.f - 1) % 4
+        private.save(state.general)
         return private.waitForResponse(id)
     end
     return false
@@ -474,7 +477,7 @@ end
         Only fails if the event queue is full.
 ]]
 function turnAround()
-    return turn(state.position.f + 2)
+    return turn(state.general.position.f + 2)
 end
 
 --[[
@@ -493,33 +496,33 @@ function turn(towards)
     -- Ensure new facing is in bounds.
     towards = towards % 4
     -- Turn towards the target facing.
-    local ids = {}
-    while state.position.f ~= towards do
+    local ids, position = {}, state.general.position
+    while position.f ~= towards do
         -- We do not use the turnLeft() and turnRight() functions, because we
         -- want full control: we push all native events in one go and then wait
         -- for all of them to finish. This way we can stick to the pattern of
         -- immediately returning (non-yielding) if the turn fails due to a full
         -- event queue.
         local id
-        if towards == (state.position.f + 1) % 4 then
+        if towards == (position.f + 1) % 4 then
             -- Special case for turning clockwise, to avoid turning three times
             -- when once is enough, in particular for the left -> forward case,
             -- where we wrap around (from 3 -> 0).
             id = turtle.native.turnRight()
             if id >= 0 then
-                state.position.f = (state.position.f + 1) % 4
+                position.f = (position.f + 1) % 4
             else
                 return false
             end
         else
             id = turtle.native.turnLeft()
             if id >= 0 then
-                state.position.f = (state.position.f - 1) % 4
+                position.f = (position.f - 1) % 4
             else
                 return false
             end
         end
-        private.save()
+        private.save(state.general)
         table.insert(ids, id)
     end
     return private.waitForResponse(ids)
@@ -559,21 +562,22 @@ function waypoint.add(name, x, y, z, facing)
 
     -- Default to current position; also take facing if we use the exact
     -- coordinates, i.e. we wouldn't have to move to reach the waypoint.
+    local position = state.general.position
     if x == nil and y == nil and z == nil then
-        facing = state.position.f
+        facing = position.f
     end
-    x = x or state.position.x
-    y = y or state.position.y
-    z = z or state.position.z
+    x = x or position.x
+    y = y or position.y
+    z = z or position.z
 
     local wasOverwritten = waypoint.exists(name)
-    waypoints[name] = {
+    state.waypoints[name] = {
         x = math.floor(x),
         y = math.floor(y),
         z = math.floor(z),
         f = facing and math.floor(facing) or nil
     }
-    private.saveWaypoints()
+    private.save(state.waypoints)
     return wasOverwritten
 end
 
@@ -588,8 +592,8 @@ function waypoint.remove(name)
     if not waypoint.exists(name) then
         return false
     end
-    waypoints[name] = nil
-    private.saveWaypoints()
+    state.waypoints[name] = nil
+    private.save(state.waypoints)
     return true
 end
 
@@ -600,7 +604,7 @@ end
     @return true if a waypoint of that name exists; false otherwise.
 ]]
 function waypoint.exists(name)
-    return waypoints[name] ~= nil
+    return state.waypoints[name] ~= nil
 end
 
 --[[
@@ -613,7 +617,7 @@ end
 function waypoint.get(name)
     assert(waypoint.exists(name),
         "no such waypoint, '" .. tostring(name) .. "'")
-    local w = waypoints[name]
+    local w = state.waypoints[name]
     return w.x, w.y, w.z, w.f
 end
 
@@ -774,8 +778,18 @@ private.direction = {
 
 -- Initialize state variable with defaults.
 state = {
-    -- Coordinates and facing.
-    position = {x = 0, y = 0, z = 0, f = 0},
+    general = {
+        -- Coordinates and facing.
+        position = {x = 0, y = 0, z = 0, f = 0}
+    },
+
+    -- This is used to keep track of how many times we tried to wrap the
+    -- startup file in a nested fashion. We need to store this in the
+    -- persistent state in case the API is loaded again (which would reset
+    -- normal variables) and it helps us to check whether we need to unwrap
+    -- the startup file when resuming after a reboot.
+    startupWrapLevel = 0,
+
     -- The current movement state, i.e. the direction we're moving in, the fuel
     -- level before the move started, the remaining tries and whether we're
     -- moving aggressively or not.
@@ -786,16 +800,14 @@ state = {
     -- Format: {steps={{x=?, y=?, z=?, f=?}, ...}, tries=?, aggressive=?}.
     path = nil,
 
-    -- This is used to keep track of how many times we tried to wrap the
-    -- startup file in a nested fashion. We need to store this in the
-    -- persistent state in case the API is loaded again (which would reset
-    -- normal variables) and it helps us to check whether we need to unwrap the
-    -- startup file when resuming after a reboot.
-    startupWrapLevel = 0
+    -- List of registered waypoints.
+    waypoints = {}
 }
 
--- Schema for the state variable.
-private.stateSchema = {
+-- Schemas for the state variable. This defines the expected value types and
+-- value presence in the state, which we use to validate a loaded state.
+private.schema = {}
+private.schema.general = {
     type = "table",
     properties = {
         position = {
@@ -806,49 +818,44 @@ private.stateSchema = {
                 z = {type = "number"},
                 f = {type = "number"}
             }
-        },
-        move = {
-            type = "table",
-            optional = true,
-            properties = {
-                direction = {
-                    type = "number",
-                    value = function(v) return private.direction[v] ~= nil end
-                },
-                preMoveFuel = {type = "number"},
-                tries = {type = "number"},
-                aggressive = {type = "boolean"}
-            }
-        },
-        path = {
-            type = "table",
-            optional = true,
-            properties = {
-                steps = {
-                    type = "table",
-                    entries = {
-                        type = "table",
-                        properties = {
-                            x = {type = "number"},
-                            y = {type = "number"},
-                            z = {type = "number"},
-                            f = {type = "number", optional = true}
-                        }
-                    }
-                },
-                tries = {type = "number"},
-                aggressive = {type = "boolean"}
-            }
-        },
-        startupWrapLevel = {type = "number"}
+        }
     }
 }
-
--- List of registered waypoints.
-waypoints = {}
-
--- Schema for the waypoints variable.
-private.waypointSchema = {
+private.schema.startupWrapLevel = {type = "number"}
+private.schema.move = {
+    type = "table",
+    optional = true,
+    properties = {
+        direction = {
+            type = "number",
+            value = function(v) return private.direction[v] ~= nil end
+        },
+        preMoveFuel = {type = "number"},
+        tries = {type = "number"},
+        aggressive = {type = "boolean"}
+    }
+}
+private.schema.path = {
+    type = "table",
+    optional = true,
+    properties = {
+        steps = {
+            type = "table",
+            entries = {
+                type = "table",
+                properties = {
+                    x = {type = "number"},
+                    y = {type = "number"},
+                    z = {type = "number"},
+                    f = {type = "number", optional = true}
+                }
+            }
+        },
+        tries = {type = "number"},
+        aggressive = {type = "boolean"}
+    }
+}
+private.schema.waypoints = {
     type = "table",
     entries = {
         type = "table",
@@ -880,8 +887,9 @@ private.waypointSchema = {
 function private.validate(value, schema)
     assert(schema ~= nil, "no schema given")
     local function validate(value, schema, path)
-        -- Is the value optional? We do this first because we still want to return
-        -- false if the type mismatches if the value is optional but not nil.
+        -- Is the value optional? We do this first because we still want to
+        -- return false if the type mismatches if the value is optional but not
+        -- nil.
         if schema.optional and value == nil then
             return true
         end
@@ -953,71 +961,82 @@ end
 -------------------------------------------------------------------------------
 
 --[[
-    Saves the current position, facing and movement state.
+    Saves the specified state section to its corresponding file.
 
     @private
 ]]
-function private.save()
+function private.save(what)
+    local filename
+    if what == state.general then
+        filename = stateFile
+    elseif what == state.startupWrapLevel then
+        -- Note to self: this only works as long it remains the only integer.
+        filename = wrapFile
+    elseif what == state.move then
+        filename = moveFile
+    elseif what == state.path then
+        filename = pathFile
+    elseif what == state.waypoints then
+        filename = waypointsFile
+    else
+        error("you found a bug")
+    end
     -- Serialize before opening the file, just in case.
-    local t = textutils.serialize(state)
-    local f = fs.open(stateFile, "w")
-    f.write(t)
-    f.close()
+    local data = textutils.serialize(what)
+    local file = fs.open(filename, "w")
+    file.write(data)
+    file.close()
 end
 
 --[[
-    Saves the list of known waypoints.
-
-    @private
-]]
-function private.saveWaypoints()
-    -- Serialize before opening the file, just in case.
-    local t = textutils.serialize(waypoints)
-    local f = fs.open(waypointsFile, "w")
-    f.write(t)
-    f.close()
-end
-
---[[
-    Restores the position, facing and movement state as well as the list of
-    known waypoints.
+    Restores the complete state.
 
     @private
 ]]
 function private.load()
-    local function load(file, schema, default)
+    local function load(filename, schema, default)
         -- Check if the file even exists.
-        if not fs.exists(file) or fs.isDir(file) then
-            return default
-        end
-        local f = fs.open(file, "r")
-        local t = f.readAll()
-        f.close()
+        if fs.exists(filename) and not fs.isDir(filename) then
+            -- Read the text data from the file.
+            local file = fs.open(filename, "r")
+            local data = file.readAll()
+            file.close()
 
-        -- Unserialize after closing the file, just in case. I don't fully
-        -- trust CC Lua's GC in this regard because I had to actually close MC
-        -- once or twice because some files stayed locked even though I already
-        -- returned to the menu.
-        local v = textutils.unserialize(t)
+            -- Unserialize after closing the file, just in case. I don't fully
+            -- trust CC Lua's GC in this regard because I had to actually close
+            -- MC once or twice because some files stayed locked even though I
+            -- already returned to the menu.
+            local result = textutils.unserialize(data)
 
-        -- Validate the read value.
-        local result, reason = private.validate(v, schema)
-        if not result then
-            if deleteInvalidStateFiles then
-                print("LAMA: Invalid file '" .. file ..
-                    "' (" .. reason .. "), deleting and ignoring it.")
-                fs.delete(stateFile)
+            -- Validate the read state.
+            local valid, reason = private.validate(result, schema)
+            if not valid then
+                if deleteInvalidStateFiles then
+                    print("LAMA: Invalid file '" .. filename ..
+                        "' (" .. reason .. "), deleting and ignoring it.")
+                    fs.delete(filename)
+                else
+                    print("LAMA: Invalid file '" .. filename ..
+                        "' (" .. reason .. "), ignoring it.")
+                end
             else
-                print("LAMA: Invalid file '" .. file ..
-                    "' (" .. reason .. "), ignoring it.")
+                return result
             end
-        else
-            return v
         end
         return default
     end
-    state = load(stateFile, private.stateSchema, state)
-    waypoints = load(waypointsFile, private.waypointSchema, waypoints)
+
+    -- Read all state sections one by one.
+    state.general =
+        load(stateFile, private.schema.general, state.general)
+    state.startupWrapLevel =
+        load(wrapFile, private.schema.startupWrapLevel, state.startupWrapLevel)
+    state.move =
+        load(moveFile, private.schema.move, state.move)
+    state.path =
+        load(pathFile, private.schema.path, state.path)
+    state.waypoints =
+        load(waypointsFile, private.schema.waypoints, state.waypoints)
 end
 
 -------------------------------------------------------------------------------
@@ -1104,6 +1123,7 @@ function private.wrapStartup()
         end
     end
     state.startupWrapLevel = state.startupWrapLevel + 1
+    private.save(state.startupWrapLevel)
 end
 
 --[[
@@ -1123,8 +1143,10 @@ function private.unwrapStartup(force)
             private.startupHandler.unwrap()
         end
         state.startupWrapLevel = 0
+        fs.delete(wrapFile)
     elseif state.startupWrapLevel > 0 then
         state.startupWrapLevel = state.startupWrapLevel - 1
+        private.save(state.startupWrapLevel)
     end
 end
 
@@ -1266,7 +1288,7 @@ function private.move(direction, tries, aggressive)
         local moveId = move()
         if moveId < 0 then
             -- Too many events queued already.
-            private.updateState(false, true)
+            private.endMove()
             return false, reason.queue_full
         end
         state.move = {
@@ -1275,10 +1297,10 @@ function private.move(direction, tries, aggressive)
             tries = tries,
             aggressive = aggressive
         }
+        private.save(state.move)
 
         -- Setup movement resumption via startup file and save state to disk.
         private.wrapStartup()
-        private.save()
 
         -- Wait for movement to finish.
         success = private.waitForResponse(moveId)
@@ -1288,8 +1310,10 @@ function private.move(direction, tries, aggressive)
         -- following to guarantee a clean state otherwise.
         private.unwrapStartup()
 
-        -- Update state and flush it to disk.
-        private.updateState(success, success or tries == 0)
+        -- Update state and flush it to disk if we actually moved.
+        if success then
+            private.updateState()
+        end
 
         -- If something went wrong check whether we should try again.
         if not success then
@@ -1309,12 +1333,12 @@ function private.move(direction, tries, aggressive)
                     os.sleep(2)
                 elseif dig and not dig() and tries == 1 then
                     -- Some block we can't dig, so there's nothing we can do.
-                    private.updateState(false, true)
+                    private.endMove()
                     return false, reason.unbreakable_block
                 end
             elseif aggressive and attack and not attack() and tries == 1 then
                 -- Not a block but nothing we can/may attack. Abort.
-                private.updateState(false, true)
+                private.endMove()
                 return false, reason.invulnerable_entity
             else
                 -- We cannot do anything about the obstruction, just wait for a
@@ -1330,6 +1354,9 @@ function private.move(direction, tries, aggressive)
             os.sleep(0.5)
         end
     until success
+
+    -- Clean up.
+    private.endMove()
 
     -- Return if we're successful, and when not, for what reason.
     if success then
@@ -1347,45 +1374,50 @@ end
 
     @private
 ]]
-function private.updateState(success, finish)
-    -- Check if we actually moved.
-    if success then
-        -- Shortcuts.
-        local position = state.position
-        local direction = private.direction[state.move.direction]
+function private.updateState()
+    -- Shortcuts.
+    local position = state.general.position
+    local direction = private.direction[state.move.direction]
 
-        -- Yes, update our state. Build a table with the displacement we'd
-        -- have to apply in our identity state.
-        local delta = {
-            forward = { 1,  0,  0},
-            right   = { 0,  1,  0},
-            back    = {-1,  0,  0},
-            left    = { 0, -1,  0},
-            up      = { 0,  0,  1},
-            down    = { 0,  0, -1}
-        }
+    -- Yes, update our state. Build a table with the displacement we'd
+    -- have to apply in our identity state.
+    local delta = {
+        forward = { 1,  0,  0},
+        right   = { 0,  1,  0},
+        back    = {-1,  0,  0},
+        left    = { 0, -1,  0},
+        up      = { 0,  0,  1},
+        down    = { 0,  0, -1}
+    }
 
-        -- Apply our facing.
-        for i=1,position.f do
-            delta.forward, delta.right, delta.back, delta.left =
-                delta.right, delta.back, delta.left, delta.forward
-        end
-
-        -- Finally, apply the actual displacement, based on the movement
-        -- direction. This means we may do some extra work when moving
-        -- up or down (where the facing doesn't matter), but it's not that
-        -- bad, considering how long one move takes.
-        position.x = position.x + delta[direction][1]
-        position.y = position.y + delta[direction][2]
-        position.z = position.z + delta[direction][3]
+    -- Apply our facing.
+    for i=1,position.f do
+        delta.forward, delta.right, delta.back, delta.left =
+            delta.right, delta.back, delta.left, delta.forward
     end
 
-    -- Switch back to non-moving state.
-    if finish then
-        state.move = nil
-    end
+    -- Finally, apply the actual displacement, based on the movement
+    -- direction. This means we may do some extra work when moving
+    -- up or down (where the facing doesn't matter), but it's not that
+    -- bad, considering how long one move takes.
+    position.x = position.x + delta[direction][1]
+    position.y = position.y + delta[direction][2]
+    position.z = position.z + delta[direction][3]
 
-    private.save()
+    -- Save new state.
+    private.save(state.general)
+end
+
+--[[
+    Cleans up the movement state.
+
+    This is really just for better readability.
+
+    @private
+]]
+function private.endMove()
+    state.move = nil
+    fs.delete(moveFile)
 end
 
 --[[
@@ -1441,10 +1473,6 @@ function private.navigate()
     -- turning) so that we still resume moving.
     private.wrapStartup()
 
-    -- Save state to disk. This is for when we get called via lama.move to
-    -- store the actual target, and for the startup wrap level.
-    private.save()
-
     -- Process all remaining waypoints.
     local result, reason
     repeat
@@ -1471,19 +1499,29 @@ function private.navigate()
 
         -- Done, we reached this waypoint so we can remove it from the list.
         table.remove(state.path.steps, 1)
+        private.save(state.path)
     until not result or #state.path.steps == 0
 
     -- Clear the state so we don't try to continue moving next startup.
-    state.path = nil
+    private.endNavigate()
 
     -- Unwrap the startup to restore the previous startup file, if any.
     private.unwrapStartup()
 
-    -- Save the cleaned up state to disk.
-    private.save()
-
     -- And we're done.
     return result, reason
+end
+
+--[[
+    Cleans up the navigation state.
+
+    This is really just for better readability.
+
+    @private
+]]
+function private.endNavigate()
+    state.path = nil
+    fs.delete(pathFile)
 end
 
 -------------------------------------------------------------------------------
@@ -1545,17 +1583,21 @@ if not lama then
                     reason = reason
                 }
             else
-                private.updateState(false, true)
                 private.startupResult = {
                     result = false,
                     reason = private.tryGetReason(state.move.direction)
                 }
+                -- We do this after trying to get the reason, because that can
+                -- yield (detect) so we might lose the result when we're reset
+                -- in that phase.
+                private.endMove()
             end
         elseif turtle.getFuelLevel() == state.move.preMoveFuel - 1 then
             -- We used one fuel so we made our move! As with the case above,
             -- this can only be wrong if refueling is involved somewhere,
             -- which, again, can only happen using coroutines.
-            private.updateState(true, true)
+            private.updateState()
+            private.endMove()
         else
             -- This should not be possible if the API is used correctly, i.e.
             -- it is not called from multiple coroutines and no other movement
@@ -1579,8 +1621,7 @@ if not lama then
         else
             -- Something went wrong, exit travel mode. We don't have to touch
             -- the startup result, it's obviously already set.
-            state.path = nil
-            private.save()
+            private.endNavigate()
         end
     end
 end
