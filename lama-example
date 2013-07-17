@@ -55,7 +55,7 @@ local function travel()
     while #state > 0 do
     	local name = table.remove(state)
     	print("Moving to '" .. name .. "'...")
-        local result, reason = lama.move(name)
+        local result, reason = lama.waypoint.goto(name)
         if not result then
         	print("Failed moving to waypoint: " .. reason)
         	break
@@ -69,9 +69,9 @@ end
 -------------------------------------------------------------------------------
 
 if fs.exists(stateFile) then
-    print("Resuming journey...")
     local result, reason = lama.startupResult()
     if result then
+        print("Resuming journey...")
         load()
         travel()
     else

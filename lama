@@ -48,7 +48,8 @@
 local apiPath = "/lama"
 
 -- This is the name of the file in which we store our state, i.e. the position
--- and facing of the turtle, as well as whether it is currently moving or not.
+-- and facing of the turtle, as well as whether it is currently moving or not,
+-- as well as some other state information.
 -- You may want to change this if it collides with another program or API.
 local stateFile = "/.lama-state"
 
@@ -61,6 +62,7 @@ local waypointsFile = "/.lama-waypoints"
 -- creating the startup file used to finish any running moves in case the
 -- turtle is forced to shut down during the move. This is only used if no
 -- multi-startup-script system is found on the computer.
+-- You may want to change this if it collides with another program or API.
 local startupBackupFile = "/.lama-startup-backup"
 
 -- If you meddle with the state files by hand you may want to set this to false
@@ -107,8 +109,10 @@ local state = {
     tries = 0,
     -- Whether we may attack obstacles when retrying.
     aggressive = false,
+
     -- The target we're currently moving towards when performing a multi-block
-    -- movement (lama.move was called). Format: {x=?, y=?, z=?, f=?}.
+    -- movement (lama.move was called).
+    -- Format: {x=?, y=?, z=?, f=?, tries=?, aggressive=?}.
     target = nil,
 
     -- This is used to keep track of how many times we tried to wrap the
@@ -219,7 +223,7 @@ setmetatable(reason, {
         will try to dig its way through any obstructions as many times (e.g. to
         get through stacks of sand or gravel).
     @param aggressive if set to true, will also try to attack to clear its way
-        when obstructed - even if it's the player!
+        when obstructed.
     @return true if the turtle moved successfully, (false, reason) if it failed
         and is still in the same position.
 ]]
@@ -258,7 +262,7 @@ end
         will try to dig its way through any obstructions as many times (e.g. to
         get through stacks of sand or gravel).
     @param aggressive if set to true, will also try to attack to clear its way
-        when obstructed - even if it's the player!
+        when obstructed.
     @return true if the turtle moved successfully, (false, reason) if it failed
         and is still in the same position.
 ]]
@@ -276,7 +280,7 @@ end
         will try to dig its way through any obstructions as many times (e.g. to
         get through stacks of sand or gravel).
     @param aggressive if set to true, will also try to attack to clear its way
-        when obstructed - even if it's the player!
+        when obstructed.
     @return true if the turtle moved successfully, (false, reason) if it failed
         and is still in the same position.
 ]]
@@ -291,10 +295,6 @@ end
     Moves the turtle to the specified location and turns it to face in the
     specified direction.
 
-    Note that instead of specifying the coordinates, you can also specify the
-    name of a waypoints. I.e. if the first parameter is a string, it is
-    interpreted as a waypoint, and the turtle will move to that waypoint.
-
     If the turtle is shut down while moving to the specified target coordinates
     it will continue moving after booting up again. After it finished moving,
     either because it reached its target or because it encountered a problem,
@@ -305,21 +305,17 @@ end
     @param x the target Y position.
     @param x the target Z position.
     @param facing the final facing, after reaching the target position.
+    @param tries how often to try to move for each single move. If this larger
+        than zero, the turtle will try to dig its way through any obstructions
+        as many times (e.g. to get through stacks of sand or gravel).
+    @param aggressive if set to true, will also try to attack to clear its way
+        when obstructed.
     @return true if the turtle moved successfully, (false, reason) if it failed
         and stopped somewhere along the way.
 ]]
-function move(x, y, z, facing)
+function goto(x, y, z, facing, tries, aggressive)
     if state.target then
         return false, reason.coroutine
-    end
-
-    -- Assume we were given the name of a waypoint if the first argument is of
-    -- type string.
-    if type(x) == "string" then
-        if not waypoint.exists(x) then
-            return false, reason.no_such_waypoint
-        end
-        x, y, z, facing = waypoint.get(x)
     end
 
     -- Type checks.
@@ -328,9 +324,20 @@ function move(x, y, z, facing)
     assert(type(z) == "number", "'z' must be a number")
     assert(facing == nil or type(facing) == "number",
         "'facing' must be a number or omitted")
+    assert(tries == nil or type(tries) == "number",
+        "'tries' must be a number or omitted")
+    assert(aggressive == nil or type(aggressive) == "boolean",
+        "'aggressive' must be a boolean or omitted")
 
     -- Set our new target and start moving.
-    state.target = {x = x, y = y, z = z, f = facing}
+    state.target = {
+        x = x,
+        y = y,
+        z = z,
+        f = facing,
+        tries = tries or 0,
+        aggressive = aggressive or false
+    }
     return private.navigate()
 end
 
@@ -536,6 +543,11 @@ waypoint = {}
 --[[
     Adds a new waypoint to the list of known waypoints.
 
+    Note that the coordiantes are optional. If they are not specified,
+    the current coordiantes will be used. If all three coordinates are omitted
+    the facing of the waypoint will be set to the current facing; otherwise the
+    waypoint's facing will be unspecified.
+
     @param name the name of the waypoint.
     @param x the X coordinate of the waypoint.
     @param y the Y coordinate of the waypoint.
@@ -547,11 +559,20 @@ waypoint = {}
 function waypoint.add(name, x, y, z, facing)
     -- Type checking.
     assert(type(name) == "string", "'name' must be a string")
-    assert(type(x) == "number", "'x' must be a number")
-    assert(type(y) == "number", "'y' must be a number")
-    assert(type(z) == "number", "'z' must be a number")
+    assert(x == nil or type(x) == "number", "'x' must be a number or omitted")
+    assert(y == nil or type(y) == "number", "'y' must be a number or omitted")
+    assert(z == nil or type(z) == "number", "'z' must be a number or omitted")
     assert(facing == nil or type(facing) == "number",
         "'facing' must be a number or omitted")
+
+    -- Default to current position; also take facing if we use the exact
+    -- coordinates, i.e. we wouldn't have to move to reach the waypoint.
+    if x == nil and y == nil and z == nil then
+        facing = state.position.f
+    end
+    x = x or state.position.x
+    y = y or state.position.y
+    z = z or state.position.z
 
     local wasOverwritten = waypoint.exists(name)
     waypoints[name] = {
@@ -620,6 +641,32 @@ function waypoint.iter()
             return k, v.x, v.y, v.z, v.f
         end
     end
+end
+
+--[[
+    Moves the turtle to the specified waypoint.
+
+    If the turtle is shut down while moving to the specified target coordinates
+    it will continue moving after booting up again. After it finished moving,
+    either because it reached its target or because it encountered a problem,
+    the remaining startup scripts will be executed and the result of the move
+    command can be queried via lama.startupResult().
+
+    @param name the name of the waypoint to move to.
+    @param tries how often to try to move for each single move. If this larger
+        than zero, the turtle will try to dig its way through any obstructions
+        as many times (e.g. to get through stacks of sand or gravel).
+    @param aggressive if set to true, will also try to attack to clear its way
+        when obstructed.
+    @return true if the turtle moved successfully, (false, reason) if it failed
+        and stopped somewhere along the way.
+]]
+function waypoint.goto(name, tries, aggressive)
+    if not waypoint.exists(name) then
+        return false, reason.no_such_waypoint
+    end
+    x, y, z, facing = waypoint.get(name)
+    return goto(x, y, z, facing, tries, aggressive)
 end
 
 -----------------------
@@ -756,7 +803,9 @@ function private.load()
                 type(s.target.x) ~= "number" or
                 type(s.target.y) ~= "number" or
                 type(s.target.z) ~= "number" or
-                (s.target.f ~= nil and type(s.target.f) ~= "number"))) or
+                (s.target.f ~= nil and type(s.target.f) ~= "number") or
+                type(s.target.tries) ~= "number" or
+                type(s.target.aggressive) ~= "boolean")) or
            type(s.startupWrapLevel) ~= "number"
         then
             if deleteInvalidStateFiles then
@@ -1206,8 +1255,9 @@ function private.navigate()
             y = forward,
             z = distance > 0 and up or down})[axis]
         distance = math.abs(distance)
+        local tries, aggressive = state.target.tries, state.target.aggressive
         while distance > 0 do
-            local result, reason = action(5) -- Try up to 5 times.
+            local result, reason = action(tries, aggressive)
             if not result then
                 return result, reason
             end
