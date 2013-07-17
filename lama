@@ -251,10 +251,10 @@ end
         and is still in the same position.
 ]]
 function forward(tries, aggressive)
-    if state.moving then
+    if state.move then
         return false, reason.coroutine
     end
-    return private.move("forward", tries, aggressive)
+    return private.move(private.direction.forward, tries, aggressive)
 end
 
 --[[
@@ -272,10 +272,10 @@ end
         and is still in the same position.
 ]]
 function back(tries)
-    if state.moving then
+    if state.move then
         return false, reason.coroutine
     end
-    return private.move("back", tries)
+    return private.move(private.direction.back, tries)
 end
 
 --[[
@@ -290,10 +290,10 @@ end
         and is still in the same position.
 ]]
 function up(tries, aggressive)
-    if state.moving then
+    if state.move then
         return false, reason.coroutine
     end
-    return private.move("up", tries, aggressive)
+    return private.move(private.direction.up, tries, aggressive)
 end
 
 --[[
@@ -308,10 +308,10 @@ end
         and is still in the same position.
 ]]
 function down(tries, aggressive)
-    if state.moving then
+    if state.move then
         return false, reason.coroutine
     end
-    return private.move("down", tries, aggressive)
+    return private.move(private.direction.down, tries, aggressive)
 end
 
 --[[
@@ -746,45 +746,40 @@ end
 
 -- Raise error when trying to access invalid key in the constant tables. This
 -- is meant to make it easier to track down typos.
-setmetatable(side, {
-    __index = function(t,k)
-        error("Trying to access invalid 'side' constant '" .. k .. "'.")
-    end,
-    __newindex = function()
-        error("Trying to modify readonly table.")
-        -- Yes, existing entries can be overwritten like this, but I prefer to
-        -- keep the table enumerable via pairs().
-    end
-})
-setmetatable(reason, {
-    __index = function(t,k)
-        error("Trying to access invalid 'reason' constant '" .. k .. "'.")
-    end,
-    __newindex = function()
-        error("Trying to modify readonly table.")
-        -- Yes, existing entries can be overwritten like this, but I prefer to
-        -- keep the table enumerable via pairs().
-    end
-})
+local function makeReadonly(table, name)
+    setmetatable(table, {
+        __index = function(t,k)
+            error("Trying to access invalid '" .. name ..
+                  "' constant '" .. k .. "'.")
+        end,
+        __newindex = function()
+            error("Trying to modify readonly table.")
+            -- Yes, existing entries can be overwritten like this, but I prefer
+            -- to keep the table enumerable via pairs(). And this is just a
+            -- utility "feature" anyway.
+        end
+    })
+end
+makeReadonly(table, "lama.side")
+makeReadonly(reason, "lama.reason")
 
 -- Namespace for private functions.
 private = {}
+
+-- Movement directions, used for move state, as a bidirectional map.
+private.direction = {
+    [1] = "forward", [2] = "back", [3] = "up", [4] = "down",
+    forward = 1,     back = 2,     up = 3,     down = 4
+}
 
 -- Initialize state variable with defaults.
 state = {
     -- Coordinates and facing.
     position = {x = 0, y = 0, z = 0, f = 0},
-    -- Whether we're currently moving.
-    moving = false,
-    -- Only relevant if moving is not false, in which case it's the fuel level
-    -- from before triggering the move. This is used to check if we actually
-    -- moved in case the turtle is forcibly shut down during the move (due to
-    -- the server quitting or the chunk unloading, for example).
-    preMoveFuel = 0,
-    -- Number of tries left for the current move command.
-    tries = 0,
-    -- Whether we may attack obstacles when retrying.
-    aggressive = false,
+    -- The current movement state, i.e. the direction we're moving in, the fuel
+    -- level before the move started, the remaining tries and whether we're
+    -- moving aggressively or not.
+    move = nil,
 
     -- The path we're currently moving along when performing a multi-block
     -- movement (lama.navigate or lama.goto/lama.waypoint.goto was called).
@@ -812,8 +807,19 @@ private.stateSchema = {
                 f = {type = "number"}
             }
         },
-        moving = {type = {"boolean", "string"}},
-        tries = {type = "number"},
+        move = {
+            type = "table",
+            optional = true,
+            properties = {
+                direction = {
+                    type = "number",
+                    value = function(v) return private.direction[v] ~= nil end
+                },
+                preMoveFuel = {type = "number"},
+                tries = {type = "number"},
+                aggressive = {type = "boolean"}
+            }
+        },
         path = {
             type = "table",
             optional = true,
@@ -898,6 +904,11 @@ function private.validate(value, schema)
         elseif schema.type and type(value) ~= schema.type then
             return false, path .. ": invalid type; is " .. type(value) ..
                 ", should be " .. schema.type
+        end
+
+        -- See if we have a custom validator function.
+        if schema.value and not schema.value(value) then
+            return false, path .. ": invalid value"
         end
 
         -- Recursively check properties of the value.
@@ -1159,17 +1170,17 @@ end
 ]]
 function private.tryGetReason(direction)
     local detect = ({
-        forward = turtle.detect,
-        up      = turtle.detectUp,
-        down    = turtle.detectDown})[direction]
-    local side = ({
-        forward = "front",
-        up      = "top",
-        down    = "bottom"})[direction]
+        [private.direction.forward] = turtle.detect,
+        [private.direction.up]      = turtle.detectUp,
+        [private.direction.down]    = turtle.detectDown})[direction]
+    local sideName = ({
+        [private.direction.forward] = "front",
+        [private.direction.up]      = "top",
+        [private.direction.down]    = "bottom"})[direction]
     if detect then
         if detect() then
-            if peripheral.isPresent(side) and
-               peripheral.getType(side) == "turtle"
+            if peripheral.isPresent(sideName) and
+               peripheral.getType(sideName) == "turtle"
             then
                 -- A turtle is blocking us.
                 return reason.turtle
@@ -1223,26 +1234,26 @@ function private.move(direction, tries, aggressive)
 
     -- Mapping for functions based on movement direction.
     local move = ({
-        forward = turtle.native.forward,
-        back    = turtle.native.back,
-        up      = turtle.native.up,
-        down    = turtle.native.down})[direction]
+        [private.direction.forward] = turtle.native.forward,
+        [private.direction.back]    = turtle.native.back,
+        [private.direction.up]      = turtle.native.up,
+        [private.direction.down]    = turtle.native.down})[direction]
     local detect = ({
-        forward = turtle.detect,
-        up      = turtle.detectUp,
-        down    = turtle.detectDown})[direction]
+        [private.direction.forward] = turtle.detect,
+        [private.direction.up]      = turtle.detectUp,
+        [private.direction.down]    = turtle.detectDown})[direction]
     local dig = ({
-        forward = turtle.dig,
-        up      = turtle.digUp,
-        down    = turtle.digDown})[direction]
+        [private.direction.forward] = turtle.dig,
+        [private.direction.up]      = turtle.digUp,
+        [private.direction.down]    = turtle.digDown})[direction]
     local attack = ({
-        forward = turtle.attack,
-        up      = turtle.attackUp,
-        down    = turtle.attackDown})[direction]
+        [private.direction.forward] = turtle.attack,
+        [private.direction.up]      = turtle.attackUp,
+        [private.direction.down]    = turtle.attackDown})[direction]
     local side = ({
-        forward = "front",
-        up      = "top",
-        down    = "bottom"})[direction]
+        [private.direction.forward] = "front",
+        [private.direction.up]      = "top",
+        [private.direction.down]    = "bottom"})[direction]
 
     -- Try to move until we're out of tries (or successful).
     local success
@@ -1251,16 +1262,19 @@ function private.move(direction, tries, aggressive)
         -- level before the command to allow testing for a successful move in
         -- case we are interrupted by a server quit / chunk unload while
         -- waiting for the move to finish.
-        state.preMoveFuel = turtle.getFuelLevel()
+        local preMoveFuel = turtle.getFuelLevel()
         local moveId = move()
         if moveId < 0 then
             -- Too many events queued already.
             private.updateState(false, true)
             return false, reason.queue_full
         end
-        state.moving = direction
-        state.tries = tries
-        state.aggressive = aggressive
+        state.move = {
+            direction = direction,
+            preMoveFuel = preMoveFuel,
+            tries = tries,
+            aggressive = aggressive
+        }
 
         -- Setup movement resumption via startup file and save state to disk.
         private.wrapStartup()
@@ -1337,7 +1351,8 @@ function private.updateState(success, finish)
     -- Check if we actually moved.
     if success then
         -- Shortcuts.
-        local position, direction = state.position, state.moving
+        local position = state.position
+        local direction = private.direction[state.move.direction]
 
         -- Yes, update our state. Build a table with the displacement we'd
         -- have to apply in our identity state.
@@ -1367,10 +1382,7 @@ function private.updateState(success, finish)
 
     -- Switch back to non-moving state.
     if finish then
-        state.moving = false
-        state.preMoveFuel = 0
-        state.tries = 0
-        state.aggressive = false
+        state.move = nil
     end
 
     private.save()
@@ -1512,20 +1524,22 @@ if not lama then
 
     -- Check if we performed a single move and finish any pending multi-try
     -- single moves.
-    if state.moving then
+    if state.move then
         -- Here is the trick: if we did complete a move started directly before
         -- the turtle was shut down (server quit or chunk unload) then we
         -- expect to have exactly one fuel less than before, since only
         -- successful moves use up (exactly one) fuel.
-        if turtle.getFuelLevel() == state.preMoveFuel then
+        if turtle.getFuelLevel() == state.move.preMoveFuel then
             -- No fuel was used, so we didn't move. This can only fail if we
             -- refuel directly after moving, which cannot happen unless its
             -- pretty much forced using coroutines... so yeah, this will do.
 
             -- If we have some tries left, continue trying.
-            if state.tries > 0 then
+            if state.move.tries > 0 then
                 local result, reason =
-                    private.move(state.moving, state.tries, state.aggressive)
+                    private.move(state.move.direction,
+                                 state.move.tries,
+                                 state.move.aggressive)
                 private.startupResult = {
                     result = result,
                     reason = reason
@@ -1534,10 +1548,10 @@ if not lama then
                 private.updateState(false, true)
                 private.startupResult = {
                     result = false,
-                    reason = private.tryGetReason(state.moving)
+                    reason = private.tryGetReason(state.move.direction)
                 }
             end
-        elseif turtle.getFuelLevel() == state.preMoveFuel - 1 then
+        elseif turtle.getFuelLevel() == state.move.preMoveFuel - 1 then
             -- We used one fuel so we made our move! As with the case above,
             -- this can only be wrong if refueling is involved somewhere,
             -- which, again, can only happen using coroutines.
