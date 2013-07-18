@@ -196,6 +196,7 @@ Changelog
   - Added more parameter type checking to avoid getting into an invalid state on bad input.
   - Changed the format of the state file by splitting it into several files, to reduce file i/o during moves. The API will automatically upgrade old state files it finds.
   - Fixed and improved validation of state files.
+  - Fixed startup result being lost when the API was loaded a second time.
   - Lots of refactoring to make the code more readable and easier to maintain.
   - Switched to MIT license.
 

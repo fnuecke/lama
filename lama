@@ -45,7 +45,7 @@
 
 -- The absolute path to this file. This is used for generating startup logic
 -- which initializes the API by loading it into the OS.
-local apiPath = "/lama/lama"
+local apiPath = "/lama"
 
 -- This is the name of the file in which we store our state, i.e. the position
 -- and facing of the turtle, as well as whether it is currently moving or not.
@@ -1711,5 +1711,14 @@ if not lama then
             -- the startup result, it's obviously already set.
             private.endNavigate()
         end
+    end
+else
+    -- API was loaded before, copy over startup result to keep it alive.
+    local result, reason = lama.startupResult()
+    if not result then
+        private.startupResult = {
+            result = result,
+            reason = reason
+        }
     end
 end
