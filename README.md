@@ -48,14 +48,16 @@ To install the API, first run:
 
 ```> pastebin get q45K18dv lama-installer```
 
-which will give you the [installer][]. After it downloaded, run it:
+which will give you the [installer](installer). After it downloaded, run it:
 
 ```> lama-installer```
 
-It will fetch the API and, if so desired the `lama-conf` program as well as an example program (it will interactively ask you).
+It will fetch the API and, if so desired the `lama-conf` program as well as an example program (it will interactively ask you). Note that the installer will *not* self-destruct, so you can use it to update your installation.
 
 Alternatively you can install the API via cc-get:
-{{{cc-get install lama}}}
+
+```> cc-get install lama```
+
 This includes only `lama-conf`, but *not* the example programs. Note that you will have to use `os.loadAPI("/bin/lama-lib/lama")` in this case (in particular, you'll have to adjust that call in the example programs).
 
 In both cases you will get the [minified version](lama-min), which is roughly only 30% the size of the [original version](lama). The minified version was generated using [luamin][]. I just slightly modified it so that all variable names are kept, in particular so that config variables are left in a readable state.
