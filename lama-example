@@ -10,6 +10,9 @@
         lama-conf add br 0 2 1 east
 
         lama-example tl tr br tr home
+
+    Note that what this program does could also be achieved by simply calling
+    lama.navigate(), but I had no other ideas for (short) examples...
 ]]
 
 -- Load the LAMA API.
@@ -54,6 +57,7 @@ end
 local function travel()
     while #state > 0 do
     	local name = table.remove(state)
+        save()
     	print("Moving to '" .. name .. "'...")
         local result, reason = lama.waypoint.goto(name)
         if not result then

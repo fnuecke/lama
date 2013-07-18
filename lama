@@ -52,12 +52,17 @@ local apiPath = "/lama"
 -- We split this up into several files to keep file i/o while moving minimal.
 -- You may want to change this if it collides with another program or API.
 local stateFile = {
-    general = "/.lama-state",
-    wrap = "/.lama-wrap-state",
-    move = "/.lama-move-state",
-    path = "/.lama-path-state",
-    waypoints = "/.lama-waypoints"
+    position  = "/.lama-state",
+    waypoints = "/.lama-waypoints",
+    move      = "/.lama-move-state",
+    path      = "/.lama-path-state",
+    wrap      = "/.lama-wrap-state"
 }
+
+-- If you meddle with the state files by hand you may want to set this to false
+-- to not lose changes. This deletes state files if they fail validation, so
+-- that we don't try to re-parse them over and over again.
+local deleteInvalidStateFiles = true
 
 -- The filename of the file to backup any original startup file to when
 -- creating the startup file used to finish any running moves in case the
@@ -65,11 +70,6 @@ local stateFile = {
 -- multi-startup-script system is found on the computer.
 -- You may want to change this if it collides with another program or API.
 local startupBackupFile = "/.lama-startup-backup"
-
--- If you meddle with the state files by hand you may want to set this to false
--- to not lose changes. This deletes state files if they fail validation, so
--- that we don't try to re-parse them over and over again.
-local deleteInvalidStateFiles = true
 
 -------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
@@ -156,7 +156,7 @@ Note: all coordinates are initially relative to the turtle's origin,
     @return a tuple (x, y, z, facing).
 ]]
 function get()
-    local position = state.general.position
+    local position = state.position
     return position.x, position.y, position.z, position.f
 end
 
@@ -166,7 +166,7 @@ end
     @return the turtle's current X position.
 ]]
 function getX()
-    return state.general.position.x
+    return state.position.x
 end
 
 --[[
@@ -175,7 +175,7 @@ end
     @return the turtle's current Y position.
 ]]
 function getY()
-    return state.general.position.y
+    return state.position.y
 end
 
 --[[
@@ -184,7 +184,7 @@ end
     @return the turtle's current Z position.
 ]]
 function getZ()
-    return state.general.position.z
+    return state.position.z
 end
 
 --[[
@@ -193,7 +193,7 @@ end
     @return a vector instance representing the turtle's position.
 ]]
 function getPosition()
-    local position = state.general.position
+    local position = state.position
     return vector.new(position.x, position.y, position.z)
 end
 
@@ -204,7 +204,7 @@ end
     @see lama.side
 ]]
 function getFacing()
-    return state.general.position.f
+    return state.position.f
 end
 
 --[[
@@ -231,12 +231,12 @@ function set(x, y, z, facing)
     assert(type(z) == "number", "'z' must be a number")
     assert(type(facing) == "number", "'facing' must be a number")
 
-    local position = state.general.position
+    local position = state.position
     position.x = x
     position.y = y
     position.z = z
     position.f = facing % 4
-    private.save("general")
+    private.save("position")
     return get()
 end
 
@@ -449,8 +449,8 @@ end
 function turnRight()
     local id = turtle.native.turnRight()
     if id >= 0 then
-        state.general.position.f = (state.general.position.f + 1) % 4
-        private.save("general")
+        state.position.f = (state.position.f + 1) % 4
+        private.save("position")
         return private.waitForResponse(id)
     end
     return false
@@ -464,8 +464,8 @@ end
 function turnLeft()
     local id = turtle.native.turnLeft()
     if id >= 0 then
-        state.general.position.f = (state.general.position.f - 1) % 4
-        private.save("general")
+        state.position.f = (state.position.f - 1) % 4
+        private.save("position")
         return private.waitForResponse(id)
     end
     return false
@@ -479,7 +479,7 @@ end
         Only fails if the event queue is full.
 ]]
 function turnAround()
-    return turn(state.general.position.f + 2)
+    return turn(state.position.f + 2)
 end
 
 --[[
@@ -498,7 +498,7 @@ function turn(towards)
     -- Ensure new facing is in bounds.
     towards = towards % 4
     -- Turn towards the target facing.
-    local ids, position = {}, state.general.position
+    local ids, position = {}, state.position
     while position.f ~= towards do
         -- We do not use the turnLeft() and turnRight() functions, because we
         -- want full control: we push all native events in one go and then wait
@@ -524,7 +524,7 @@ function turn(towards)
                 return false
             end
         end
-        private.save("general")
+        private.save("position")
         table.insert(ids, id)
     end
     return private.waitForResponse(ids)
@@ -564,7 +564,7 @@ function waypoint.add(name, x, y, z, facing)
 
     -- Default to current position; also take facing if we use the exact
     -- coordinates, i.e. we wouldn't have to move to reach the waypoint.
-    local position = state.general.position
+    local position = state.position
     if x == nil and y == nil and z == nil then
         facing = position.f
     end
@@ -634,7 +634,7 @@ end
 function waypoint.iter()
     local name, coordinate
     return function()
-        name, coordinate = next(waypoints, name)
+        name, coordinate = next(state.waypoints, name)
         if name then
             return name, coordinate.x, coordinate.y, coordinate.z, coordinate.f
         end
@@ -752,22 +752,24 @@ end
 
 -- Raise error when trying to access invalid key in the constant tables. This
 -- is meant to make it easier to track down typos.
-local function makeReadonly(table, name)
-    setmetatable(table, {
-        __index = function(t,k)
-            error("Trying to access invalid '" .. name ..
-                  "' constant '" .. k .. "'.")
-        end,
-        __newindex = function()
-            error("Trying to modify readonly table.")
-            -- Yes, existing entries can be overwritten like this, but I prefer
-            -- to keep the table enumerable via pairs(). And this is just a
-            -- utility "feature" anyway.
-        end
-    })
+do
+    local function makeReadonly(table, name)
+        setmetatable(table, {
+            __index = function(t,k)
+                error("Trying to access invalid '" .. name ..
+                      "' constant '" .. k .. "'.")
+            end,
+            __newindex = function()
+                error("Trying to modify readonly table.")
+                -- Yes, existing entries can be overwritten like this, but I
+                -- prefer to keep the table enumerable via pairs(). And this is
+                -- just a utility "feature" anyway.
+            end
+        })
+    end
+    makeReadonly(side, "lama.side")
+    makeReadonly(reason, "lama.reason")
 end
-makeReadonly(table, "lama.side")
-makeReadonly(reason, "lama.reason")
 
 -- Namespace for private functions.
 private = {}
@@ -780,17 +782,11 @@ private.direction = {
 
 -- Initialize state variable with defaults.
 state = {
-    general = {
-        -- Coordinates and facing.
-        position = {x = 0, y = 0, z = 0, f = 0}
-    },
+    -- Coordinates and facing.
+    position = {x = 0, y = 0, z = 0, f = 0},
 
-    -- This is used to keep track of how many times we tried to wrap the
-    -- startup file in a nested fashion. We need to store this in the
-    -- persistent state in case the API is loaded again (which would reset
-    -- normal variables) and it helps us to check whether we need to unwrap
-    -- the startup file when resuming after a reboot.
-    wrap = 0,
+    -- List of registered waypoints.
+    waypoints = {}
 
     -- The current movement state, i.e. the direction we're moving in, the fuel
     -- level before the move started, the remaining tries and whether we're
@@ -798,77 +794,76 @@ state = {
     move = nil,
 
     -- The path we're currently moving along when performing a multi-block
-    -- movement (lama.navigate or lama.goto/lama.waypoint.goto was called).
-    -- Format: {steps={{x=?, y=?, z=?, f=?}, ...}, tries=?, aggressive=?}.
+    -- movement (via lama.navigate() or lama.goto()/lama.waypoint.goto()).
     path = nil,
 
-    -- List of registered waypoints.
-    waypoints = {}
+    -- This is used to keep track of how many times we tried to wrap the
+    -- startup file in a nested fashion. We need to store this in the
+    -- persistent state in case the API is loaded again (which would reset
+    -- normal variables) and it helps us to check whether we need to unwrap
+    -- the startup file when resuming after a reboot.
+    wrap = 0,
 }
 
 -- Schemas for the state variable. This defines the expected value types and
 -- value presence in the state, which we use to validate a loaded state.
-private.schema = {}
-private.schema.general = {
-    type = "table",
-    properties = {
-        position = {
-            type = "table",
-            properties = {
-                x = {type = "number"},
-                y = {type = "number"},
-                z = {type = "number"},
-                f = {type = "number"}
-            }
-        }
-    }
-}
-private.schema.wrap = {type = "number"}
-private.schema.move = {
-    type = "table",
-    optional = true,
-    properties = {
-        direction = {
-            type = "number",
-            value = function(v) return private.direction[v] ~= nil end
-        },
-        preMoveFuel = {type = "number"},
-        tries = {type = "number"},
-        aggressive = {type = "boolean"}
-    }
-}
-private.schema.path = {
-    type = "table",
-    optional = true,
-    properties = {
-        steps = {
-            type = "table",
-            entries = {
-                type = "table",
-                properties = {
-                    x = {type = "number"},
-                    y = {type = "number"},
-                    z = {type = "number"},
-                    f = {type = "number", optional = true}
-                }
-            }
-        },
-        tries = {type = "number"},
-        aggressive = {type = "boolean"}
-    }
-}
-private.schema.waypoints = {
-    type = "table",
-    entries = {
+private.schema = {
+    position = {
         type = "table",
-        keytype = "string",
         properties = {
             x = {type = "number"},
             y = {type = "number"},
             z = {type = "number"},
-            f = {type = "number", optional = true}
+            f = {type = "number"}
         }
-    }
+    },
+    waypoints = {
+        type = "table",
+        entries = {
+            type = "table",
+            keytype = "string",
+            properties = {
+                x = {type = "number"},
+                y = {type = "number"},
+                z = {type = "number"},
+                f = {type = "number", optional = true}
+            }
+        }
+    },
+    move = {
+        type = "table",
+        optional = true,
+        properties = {
+            direction = {
+                type = "number",
+                value = function(v) return private.direction[v] ~= nil end
+            },
+            preMoveFuel = {type = "number"},
+            tries = {type = "number"},
+            aggressive = {type = "boolean"}
+        }
+    },
+    path = {
+        type = "table",
+        optional = true,
+        properties = {
+            steps = {
+                type = "table",
+                entries = {
+                    type = "table",
+                    properties = {
+                        x = {type = "number"},
+                        y = {type = "number"},
+                        z = {type = "number"},
+                        f = {type = "number", optional = true}
+                    }
+                }
+            },
+            tries = {type = "number"},
+            aggressive = {type = "boolean"}
+        }
+    },
+    wrap = {type = "number"}
 }
 
 -------------------------------------------------------------------------------
@@ -1356,7 +1351,7 @@ end
 ]]
 function private.updateState()
     -- Shortcuts.
-    local position = state.general.position
+    local position = state.position
     local direction = private.direction[state.move.direction]
 
     -- Yes, update our state. Build a table with the displacement we'd
@@ -1385,7 +1380,7 @@ function private.updateState()
     position.z = position.z + delta[direction][3]
 
     -- Save new state.
-    private.save("general")
+    private.save("position")
 end
 
 --[[
@@ -1587,10 +1582,11 @@ if not lama then
             -- This should not be possible if the API is used correctly, i.e.
             -- it is not called from multiple coroutines and no other movement
             -- functions of the turtle are used.
-            fs.delete(stateFile.general)
-            fs.delete(stateFile.wrap)
+            fs.delete(stateFile.position)
+            -- No fs.delete(stateFile.waypoints). Keep the waypoints intact.
             fs.delete(stateFile.move)
             fs.delete(stateFile.path)
+            fs.delete(stateFile.wrap)
             error("Unexpected fuel state after reboot; invalid API use?")
         end
     end
