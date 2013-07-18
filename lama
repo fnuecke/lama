@@ -807,7 +807,8 @@ state = {
 
 -- Schemas for the state variable. This defines the expected value types and
 -- value presence in the state, which we use to validate a loaded state.
-private.schema = {
+private.schema = {}
+private.schema[version] = {
     position = {
         type = "table",
         properties = {
@@ -864,6 +865,37 @@ private.schema = {
         }
     },
     wrap = {type = "number"}
+}
+
+-- Schema for version 1.0 state files (used for upgrading).
+private.schema["1.0"] = {
+    type = "table",
+    properties = {
+        position = {
+            type = "table",
+            properties = {
+                x = {type = "number"},
+                y = {type = "number"},
+                z = {type = "number"},
+                f = {type = "number"}
+            }
+        },
+        moving = {
+            type = {"boolean", "string"},
+            value = function(v)
+                if type(v) == "string" then
+                    return v == "forward" or
+                           v == "back" or
+                           v == "up" or
+                           v == "down"
+                end
+                return true
+            end
+        },
+        preMoveFuel = {type = "number"},
+        tries = {type = "number"},
+        aggressive = {type = "boolean"}
+    }
 }
 
 -------------------------------------------------------------------------------
@@ -976,20 +1008,15 @@ end
     @private
 ]]
 function private.load()
+    -- Check if we may have upgraded and the state file is of an old version.
+    if private.upgrade() then
+        return
+    end
+
+    -- Utility function for loading single sections.
     local function load(filename, schema, default)
-        -- Check if the file even exists.
-        if fs.exists(filename) and not fs.isDir(filename) then
-            -- Read the text data from the file.
-            local file = fs.open(filename, "r")
-            local data = file.readAll()
-            file.close()
-
-            -- Unserialize after closing the file, just in case. I don't fully
-            -- trust CC Lua's GC in this regard because I had to actually close
-            -- MC once or twice because some files stayed locked even though I
-            -- already returned to the menu.
-            local result = textutils.unserialize(data)
-
+        local success, result = private.unserialize(filename)
+        if success then
             -- Validate the read state.
             local valid, reason = private.validate(result, schema)
             if not valid then
@@ -1010,8 +1037,74 @@ function private.load()
 
     -- Read all state sections one by one.
     for section, filename in pairs(stateFile) do
-        state[section] = load(filename, private.schema[section], state[section])
+        state[section] = load(filename,
+                              private.schema[version][section],
+                              state[section])
     end
+end
+
+--[[
+    Utility function for unserializing data from a file.
+
+    @param filename the name of the file to deserialize the data from.
+    @return (true, result) if the file exists, false otherwise.
+    @private
+]]
+function private.unserialize(filename)
+    -- Skip if no such file exists.
+    if not fs.exists(filename) or fs.isDir(filename) then
+        return false
+    end
+
+    -- Read the text data from the file.
+    local file = fs.open(filename, "r")
+    local data = file.readAll()
+    file.close()
+
+    -- Unserialize after closing the file, just in case. I don't fully
+    -- trust CC Lua's GC in this regard because I had to actually close
+    -- MC once or twice because some files stayed locked even though I
+    -- already returned to the menu.
+    return true, textutils.unserialize(data)
+end
+
+--[[
+    Utility function for trying to upgrade a state file from previous versions.
+
+    @return true if a state file was upgraded; false otherwise.
+    @private
+]]
+function private.upgrade()
+    -- Try to parse the 'main' state file.
+    local success, result = private.unserialize(stateFile.position)
+    if not success or not private.validate(result, private.schema["1.0"]) then
+        return false
+    end
+
+    print("upgrading state file")
+
+    -- It's a version 1.0 format state file. Convert to current
+    -- format and return.
+    state.position = result.position
+    if type(result.moving) == "string" then
+        state.move = {
+            direction = private.direction[result.moving],
+            preMoveFuel = result.preMoveFuel,
+            tries = result.tries,
+            aggressive = result.aggressive
+        }
+        -- We did not track this explicitly in version 1.0, but
+        -- when in a moving state we definitely had the startup
+        -- file wrapped.
+        state.wrap = 1
+    end
+
+    -- Write back the new format.
+    private.save("position")
+    private.save("move")
+    private.save("wrap")
+
+    return true
 end
 
 -------------------------------------------------------------------------------
@@ -1228,6 +1321,7 @@ function private.move(direction, tries, aggressive)
 
     -- Clean up arguments.
     tries = tonumber(tries or 0)
+    aggressive = aggressive and true or false
 
     -- Mapping for functions based on movement direction.
     local move = ({
@@ -1400,6 +1494,7 @@ end
 
     @return true if the turtle successfully reached the target; (false, reason)
         otherwise.
+    @private
 ]]
 function private.navigate()
     -- Validate state. This function should only be called when the list of
