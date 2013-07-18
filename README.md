@@ -36,11 +36,6 @@ The API will create a startup file while performing a move, to allow completion 
 
 If you'd like to see compatibility with other multi-startup-script systems (I have not dabbled with custom OSs much, yet), let me know - or even better implement it yourself and submit a pull request. It's pretty easy to add more, as long as there's a way to detect the used script/system. Should you wish to give it a go, search for `local startupHandlers`, which is the table containing the logic for different startup handlers.
 
-Limitations
-===========
-
-If the turtle is moved by some external force (player pickaxing it and placing it somewhere else, RP2 frames, ...) the coordinates will obviously be wrong, because we have no way of tracking such influences (aside from GPS, perhaps - might look into that for roughly validating coordinates in some future version).
-
 Installation
 ============
 
@@ -58,7 +53,7 @@ Alternatively you can install the API via cc-get:
 
 ```> cc-get install lama```
 
-This includes only `lama-conf`, but *not* the example programs. Note that you will have to use `os.loadAPI("/bin/lama-lib/lama")` in this case (in particular, you'll have to adjust that call in the example programs).
+This includes only `lama-conf`, but *not* the example program. Note that you will have to use `os.loadAPI("/bin/lama-lib/lama")` in this case (in particular, you'll have to adjust that call in the example program).
 
 In both cases you will get the [minified version](lama-min), which is roughly only 30% the size of the [original version](lama). The minified version was generated using [luamin][]. I just slightly modified it so that all variable names are kept, in particular so that config variables are left in a readable state.
 
@@ -162,7 +157,14 @@ Additional files
 
 **lama-conf** can be used to query the current position and facing (`lama-conf get`), as well as set it (`lama-conf set x y z facing`) e.g. for calibrating newly placed turtles. It can also be used to manage waypoints (`lama-conf add name x y z [facing]`, `lama-conf remove name` and `lama-conf list`).
 
-**lama-example** ia a small example program, demonstrating how to use the API in a resumable program. It allows ordering the turtle to move along a path of waypoints.
+**lama-example** is a small example program, demonstrating how to use the API in a resumable program. It allows ordering the turtle to move along a path of waypoints.
+
+Limitations
+===========
+
+If the turtle is moved by some external force (player pickaxing it and placing it somewhere else, RP2 frames, ...) the coordinates will obviously be wrong, because we have no way of tracking such influences (aside from GPS, perhaps - might look into that for roughly validating coordinates in some future version).
+
+All multiblock movement will only perform straight moves, i.e. turtles will never try to evade obstacles, only break through them, if allowed. For now, I feel that pathfinding is beyond the scope of this API, so if you need it you'll have to build it on top of the API. The main reason I don't feel like this belongs in here is because it would quickly get out of hand, since you'd then have to keep track of fuel (because usage cannot be precomputed at the time the order is given) and possibly even map out the region as you go.
 
 Closing remarks
 ===============
