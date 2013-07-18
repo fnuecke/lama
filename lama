@@ -1114,8 +1114,10 @@ end
 -- List of 'handlers'. This makes it easy to add support for different startup
 -- script implementations (e.g. from different OSs or utility scripts).
 --
--- The logic works like this: for the active handler 'init' is called once when
--- the API is loaded. After that, wrap and unwrap are called like so:
+-- The logic works like this: the active handler is determined by looking for
+-- the first implementation that returns true from its 'test' function, else
+-- the default handler is used. For the selected handler 'init' is called once
+-- when the API is loaded. After that, wrap and unwrap are called like so:
 --   move command -> wrap -> actual move -> unwrap
 --   multimove -> wrap -> single moves (nested wraps!) -> unwrap
 --   startup -> unwrap(true)
@@ -1144,6 +1146,10 @@ local startupHandlers = {
             if fs.exists(startupBackupFile) then
                 fs.move(startupBackupFile, "/startup")
             end
+        end,
+        test = function()
+            -- Ignore when determining handler.
+            return false
         end
     },
 
@@ -1152,23 +1158,26 @@ local startupHandlers = {
     -- there were no pending moves, so performance impact is minimal.
     forairan = {
         init = function()
-            -- Remember whether we already have the startup file for our API.
-            if not fs.exists("/init-scripts/00_lama") then
-                local f = fs.open("/init-scripts/00_lama", "w")
-                f.write("os.loadAPI('" .. apiPath .. "')")
-                f.close()
-            end
+            -- Overwrite the startup file since the apiPath may have changed.
+            local f = fs.open("/init-scripts/00_lama", "w")
+            f.write("os.loadAPI('" .. apiPath .. "')")
+            f.close()
+        end,
+        test = function()
+            -- Assume we use Forairan's startup logic if the init-scripts
+            -- folder exists.
+            return fs.exists("/init-scripts") and fs.isDir("/init-scripts")
         end
     }
 }
 
--- Detect which handler to use.
-if fs.exists("/init-scripts") and fs.isDir("/init-scripts") then
-    -- Found init-scripts folder, assume Forairan's startup script.
-    private.startupHandler = startupHandlers.forairan
-else
-    -- Fall back to default implementation.
-    private.startupHandler = startupHandlers.default
+-- Detect which handler to use, initialize to default in case nothing applies.
+private.startupHandler = startupHandlers.default
+for _,handler in pairs(startupHandlers) do
+    if handler.test() then
+        private.startupHandler = handler
+        break
+    end
 end
 
 -- Run handler's init code.

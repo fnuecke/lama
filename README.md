@@ -1,9 +1,9 @@
-LAMA - The Location Aware Movement API for ComputerCraft Turtles
+[LAMA - The Location Aware Movement API for ComputerCraft Turtles](http://www.computercraft.info/forums2/index.php?/topic/13919-api-lama-location-aware-movement-api/)
 ================================================================
 
-This API provides *persistent* position and facing awareness for [ComputerCraft](http://www.computercraft.info/) turtles. You can query a turtle's position and facing at any time, and it will not 'desynchronize' if the turtle is unloaded (game quit / chunk unloaded) while it moves. To achieve this, it offers replacements for the default turtle movement functions, i.e. for `turtle.forward()`, `turtle.back()`, `turtle.up()`, `turtle.down()`, `turtle.turnLeft()` and `turtle.turnRight()`.
+This API provides *persistent* position and facing awareness for [ComputerCraft](http://www.computercraft.info/) turtles. You can query a turtle's position and facing at any time, and it will not 'desynchronize' if the turtle is unloaded (game quit / chunk unloaded) while it moves. To achieve this, it offers replacements for the default turtle movement functions, i.e. for `turtle.forward()`, `turtle.back()`, `turtle.up()`, `turtle.down()`, `turtle.turnLeft()` and `turtle.turnRight()`. It also provides a few more high level movement functions to travel multiple blocks, as well as a waypoint system to store coordinates and refer to them by name.
 
-This means you can write *resumable* programs that make decisions based on the turtle's position. For example, saving the following program as the `startup` file will make the turtle run in circles until it runs out of fuel (precondition: turtle starts at `x = 0, y = 0`). It will not leave its track even if the turtle is forcibly shut down at any point.
+With this API you can write *resumable* programs that make decisions based on the turtle's position. For example, saving the following program as the `startup` file will make the turtle run in circles until it runs out of fuel (precondition: turtle starts at `x = 0, y = 0`). It will not leave its track even if the turtle is forcibly shut down at any point.
 
 ```lua
 os.loadAPI("lama")
@@ -39,7 +39,7 @@ Recommended
 
 The API will create a startup file while performing a move, to allow completion of multi-try moves after reboot. If there's an original startup file, it will be backed up and after API initialization/move completion will be restored an executed. This obviously introduces additional file i/o overhead for each move. To avoid that, it is highly recommended to use [Forairan's init-scripts](http://www.computercraft.info/forums2/index.php?/topic/3018-init-scripts-utility-to-allow-for-multiple-independent-startup-scripts/) startup file. If present (or rather: if the `/init-scripts` folder exists) the API will instead create a startup script in the `/init-scripts` folder once, with no additional file i/o overhead when moving.
 
-If you'd like to see compatibility with other multi-startup-script systems (I have not dabbled with custom OSs much, yet), let me know, or even better implement it yourself and submit a pull request. It's pretty easy to add more, as long as there's a way to detect the used script/system.
+If you'd like to see compatibility with other multi-startup-script systems (I have not dabbled with custom OSs much, yet), let me know - or even better implement it yourself and submit a pull request. It's pretty easy to add more, as long as there's a way to detect the used script/system. Should you wish to give it a go, search for `local startupHandlers`, which is the table containing the logic for different startup handlers.
 
 Limitations
 ===========
@@ -49,53 +49,34 @@ If the turtle is moved by some external force (player pickaxing it and placing i
 Installation
 ============
 
-To install the API, use
-```pastebin get hCTqrKnP lama```
-which will give you the [url="http://pastebin.com/hCTqrKnP"]minified version of the API[/url],
-**OR**
-{{{pastebin get dZnWFa6c lama}}}
-for the [url="http://pastebin.com/dZnWFa6c"]fully commented version of the API[/url].
-
-The minified version is roughly only 25% the size of the commented version, so unless you want to read the code ingame I'd recommend using the minified one.
+To install the API, first run:
+```> pastebin get q45K18dv lama-installer```
+which will give you the [installer](http://pastebin.com/q45K18dv). After it downloaded, run it:
+```> lama-installer```
+It will fetch the API and, if so desired the `lama-conf` program as well as an example program (it will interactively ask you).
 
 Alternatively you can install the API via cc-get:
 {{{cc-get install lama}}}
-This includes lama-conf (see below). Note that you will have to use `os.loadAPI("/bin/lama-lib/lama")` in that case (in particular, you'll have to adjust that call in the lama-move example program).
+This includes only `lama-conf`, but *not* the example programs. Note that you will have to use `os.loadAPI("/bin/lama-lib/lama")` in this case (in particular, you'll have to adjust that call in the example programs).
+
+In both cases you will get the [minified version](https://github.com/fnuecke/lama/blob/master/lama-min), which is roughly only 30% the size of the [original version](https://github.com/fnuecke/lama/blob/master/lama). The minified version was generated using [luamin](https://github.com/mathiasbynens/luamin). I just slightly modified it so that all variable names are kept, in particular so that config variables are left in a readable state.
 
 API
 ===
-Please see the code for full documentation. It is rather well commented. While you're at it, have a look at the `lama.reason` table to see how the movement functions may fail.
-    
+Please see the [actual code](https://github.com/fnuecke/lama/blob/master/lama) for full documentation. It is rather well commented. While you're at it, have a look at the `lama.reason` table to see how the movement functions may fail.
+
+Constants
+-------
+
 * `lama.version`
     A string representing the current API version.
 * `lama.side`
     A table of constants used to represent the direction a turtle is facing.
 * `lama.reason`
     A table of constants used to indicate failure reasons when trying to move.
-.
-* `lama.forward(tries, aggressive) -> boolean, lama.reason`
-   Replacement for turtle.forward()
-* `lama.back(tries) -> boolean, lama.reason`
-    Replacement for turtle.back()
-* `lama.up(tries, aggressive) -> boolean, lama.reason`
-    Replacement for turtle.up()
-* `lama.down(tries, aggressive) -> boolean, lama.reason`
-    Replacement for turtle.down()
-* `lama.move(x, y, z, facing) / lama.move(waypoint) -> boolean, lama.reason`
-    Makes the turtle move to the specified coordinates or waypoint.
 
-The parameters 'tries' and 'aggressive' for the movement functions do the following: if 'tries' is specified, the turtle will try as many times to remove any obstruction it runs into before failing. If 'aggressive' is true in addition to that, the turtle will not only try to dig out blocks but also attack entities that stand in its way (including the player).
-
-* `lama.turnRight() -> boolean`
-    Replacement for turtle.turnRight()
-* `lama.turnLeft() -> boolean`
-    Replacement for turtle.turnRight()
-* `lama.turnAround() -> boolean`
-    Turns the turtle around
-* `lama.turn(towards) -> boolean`
-    Turns the turtle to face in the specified direction
-
-Note that all 'turning' functions behave like the original ones in that they return immediately if they fail (they can only fail if the VM's event queue is full). Otherwise they're guaranteed to complete the operation successfully. For `lama.turn()` and `lama.turnAround()` it is possible that one of two needed turn commands has already been issued, when failing. The internal state will represent that however, i.e. `lama.getFacing()` will still be correct.
+State
+-----
 
 * `lama.get()  -> x, y, z, facing`
     Get the current position and facing of the turtle
@@ -111,30 +92,77 @@ Note that all 'turning' functions behave like the original ones in that they ret
    Get the current facing of the turtle
 * `lama.set(x, y, z, facing)`
    Set the current position and facing of the turtle
-.
-* `lama.startupResult() -> boolean, lama.reason`
-    Can be used in resumable programs to check whether a move command that was issued just before the turtle was forcibly shut down completed successfully or not. You will need this if you make decisions based on the result of the movement's success (e.g. stop the program if the turtle fails to move). See the `lama-move` program below for a simple example.
-* `lama.hijackTurtleAPI(restore)`
-    Replaces the original movement functions in the turtle API with wrappers for this API. Note that the wrappers have the same signature and behavior as the original movement functions. For example, calling the wrapper `turtle.forward(5)` will *not* make the turtle dig through obstructions! This is to make sure existing programs will not behave differently after injecting the wrappers. The original functions can be restored by passing `true` as this functions parameter. **Important:** the changes to the turtle API will be global.
 
+Movement
+--------
+
+* `lama.forward(tries, aggressive) -> boolean, lama.reason`
+   Replacement for turtle.forward()
+* `lama.back(tries) -> boolean, lama.reason`
+    Replacement for turtle.back()
+* `lama.up(tries, aggressive) -> boolean, lama.reason`
+    Replacement for turtle.up()
+* `lama.down(tries, aggressive) -> boolean, lama.reason`
+    Replacement for turtle.down()
+* `lama.moveto(x, y, z, facing, tries, aggressive) / lama.move(waypoint) -> boolean, lama.reason`
+    Makes the turtle move to the specified coordinates or waypoint. Will continue across reboots.
+* `lama.navigate(path, tries, aggressive)
+    Makes the turtle move along the specified path of coordinates and/or waypoints. Will continue across reboots.
+
+The parameters 'tries' and 'aggressive' for the movement functions do the following: if 'tries' is specified, the turtle will try as many times to remove any obstruction it runs into before failing. If 'aggressive' is true in addition to that, the turtle will not only try to dig out blocks but also attack entities that stand in its way (including the player).
+
+Regarding `lama.navigate()`, note that the facing of all non-terminal path nodes will be ignored to avoid unnecessary turning along the way.
+
+Rotation
+--------
+
+* `lama.turnRight() -> boolean`
+    Replacement for turtle.turnRight()
+* `lama.turnLeft() -> boolean`
+    Replacement for turtle.turnRight()
+* `lama.turnAround() -> boolean`
+    Turns the turtle around
+* `lama.turn(towards) -> boolean`
+    Turns the turtle to face in the specified direction
+
+Note that all 'turning' functions behave like the original ones in that they return immediately if they fail (they can only fail if the VM's event queue is full). Otherwise they're guaranteed to complete the operation successfully. For `lama.turn()` and `lama.turnAround()` it is possible that one of two needed turn commands has already been issued, when failing. The internal state will represent that however, i.e. `lama.getFacing()` will still be correct.
 
 Waypoints
 ---------
 
 In some cases it may be easier (and more readable) to send your turtles to predefined, named locations, instead of some set of coordinates. That's what waypoints are for. They can be manipulated like so:
 
-* `waypoint.add(name, x, y, z, facing) -> boolean`
+* `lama.waypoint.add(name, x, y, z, facing) -> boolean`
     Adds a new waypoint or updates an existing one with the same name.
-* `waypoint.remove(name) -> boolean`
+* `lama.waypoint.remove(name) -> boolean`
     Removes a waypoint from the list of known waypoints.
-* `waypoint.exists(name) -> boolean`
+* `lama.waypoint.exists(name) -> boolean`
     Tests if a waypoint with the specified name exists.
-* `waypoint.get(name) -> x, y, z, facing`
+* `lama.waypoint.get(name) -> x, y, z, facing`
     Returns the coordinates of the specified waypoint.
-* `waypoint.iter() -> function`
+* `lama.waypoint.iter() -> function`
     Returns an iterator function over all known waypoints.
+* `lama.waypoint.moveto(name, tries, aggressive) -> result, reason`
+    This is like `lama.moveto()` except that it takes a waypoint as the target.
 
-http://www.computercraft.info/forums2/index.php?/topic/13919-api-lama-location-aware-movement-api/
+Note that waypoints *may* have a facing associated with them, but don't have to. This means that if a waypoint has a facing and the turtle is ordered to move to it, it will rotate into that direction, if it does not the turtle will remain with the orientation in which it arrived at the waypoint.
+
+Utility
+-------
+
+* `lama.startupResult() -> boolean, lama.reason`
+    Can be used in resumable programs to check whether a move command that was issued just before the turtle was forcibly shut down completed successfully or not. You will need this if you make decisions based on the result of the movement's success (e.g. stop the program if the turtle fails to move). See the `lama-move` program below for a simple example.
+* `lama.hijackTurtleAPI(restore)`
+    Replaces the original movement functions in the turtle API with wrappers for this API. Note that the wrappers have the same signature and behavior as the original movement functions. For example, calling the wrapper `turtle.forward(5)` will *not* make the turtle dig through obstructions! This is to make sure existing programs will not behave differently after injecting the wrappers. The original functions can be restored by passing `true` as this functions parameter. **Important:** the changes to the turtle API will be global.
+
+Additional files
+================
+
+**lama-conf**
+Can be used to query the current position and facing (`lama-conf get`), as well as set it (`lama-conf set x y z facing`) e.g. for calibrating newly placed turtles. It can also be used to manage waypoints (`lama-conf add name x y z [facing]`, `lama-conf remove name` and `lama-conf list`).
+
+**lama-example**
+A small example program, demonstrating how to use the API in a resumable program. It allows ordering the turtle to move along a path of waypoints.
 
 Closing remarks
 ===============
@@ -146,4 +174,26 @@ As far as I can tell, this is the first API using the fuel workaround. I'm quite
 
 If you know of another method, I'd be intrigued to hear about it, though!
 
-I have tested the robustness of the API by having the example program run continually (when done it'd pick a new random location inside a 4x4x4 cube) and quitting the game over and over (to interrupt it at different code locations, hopefully having hit each one at least once), dropping sand stacks into the turtle's path and standing in the turtle's way. Still, this is software, and testing is a tricky business, so it's very possible for some interesting bugs to remain. If you come across any (and are sure it's not your fault) please let me know, thanks!
+I have tested the robustness of the API using the following method:
+
+- Have the turtle move randomly and continually in a 4x4x4 cube (it'd pick a new target when reaching one).
+- Drop sand stacks into the turtle's path.
+- Stand in the turtle's way.
+- Have some bedrock in the cube.
+- Have a mob in the cube.
+- Quit the game over and over as well as resetting the turtle manually (Ctrl+R) to interrupt the program at different code locations, hopefully having hit each one at least once.
+
+Still, this is software, and testing is a tricky business, so it's very possible for some interesting bugs to remain. If you come across any (and are sure it's not your fault) please let me know, thanks!
+
+Changelog
+=========
+
+- Version 1.1
+  - Added lama.moveto() function which allows issuing multiblock movement commands. The turtle will try to reach the specified coordinate by moving in straight lines; if you want smart navigation/pathfinding you'll have to use some other API on top of this one, or write it yourself, since I feel that's a bit beyond the scope of this API.
+  - Added possibility to store waypoints (position plus facing). The related functions can be found in the lama.waypoint namespace.
+  - Added lama.navigate() which allows issuing chained multiblock movement commands. It expects a table of coordinates or waypoints (can be mixed) and will try to move the turtle along the specified path. This will continue across turtle reboots.
+  - Added functionality to lama-conf to manipulate waypoints.
+  - Added more parameter type checking to avoid getting into an invalid state on bad input.
+  - Changed the format of the state file by splitting it into several files, to reduce file i/o during moves. The API will automatically upgrade old state files it finds.
+  - Fixed and improved validation of state files.
+  - Lots of refactoring to make the code more readable and easier to maintain.
