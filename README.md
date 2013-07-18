@@ -30,7 +30,7 @@ This API only works on turtles that have an ID and that use fuel. The ID is requ
 **Important:** when using this API, you *must not* use any of the original movement related functions, since that would invalidate the API's internal state (coordinates would no longer match). Always use the functions of this API to move the turtle. You can use `lama.hijackTurtleAPI()` to have the functions in the turtle API replaced with wrappers for this API's functions. The native functions won't be touched; don't use them either way.
 
 Recommended
-===========
+-----------
 
 The API will create a startup file while performing a move, to allow completion of multi-try moves after reboot. If there's an original startup file, it will be backed up and after API initialization/move completion will be restored an executed. This obviously introduces additional file i/o overhead for each move. To avoid that, it is highly recommended to use [Forairan's init-scripts][forairan] startup file. If present (or rather: if the `/init-scripts` folder exists) the API will instead create a startup script in the `/init-scripts` folder once, with no additional file i/o overhead when moving.
 
@@ -81,31 +81,31 @@ State
 -----
 
 * `lama.get()  -> x, y, z, facing`  
-    Get the current position and facing of the turtle
+    Get the current position and facing of the turtle.
 * `lama.getX() -> number`  
-    Get the current X position of the turtle
+    Get the current X position of the turtle.
 * `lama.getZ() -> number`  
-    Get the current Y position of the turtle
+    Get the current Y position of the turtle.
 * `lama.getY() -> number`  
-    Get the current Z position of the turtle
+    Get the current Z position of the turtle.
 * `lama.getPosition() -> vector`  
-    Get the current position of the turtle as a vector
+    Get the current position of the turtle as a vector.
 * `lama.getFacing()   -> lama.side`  
-   Get the current facing of the turtle
-* `lama.set(x, y, z, facing)`  
-   Set the current position and facing of the turtle
+   Get the current facing of the turtle.
+* `lama.set(x, y, z, facing) -> x, y, z, facing`  
+   Set the current position and facing of the turtle.
 
 Movement
 --------
 
 * `lama.forward(tries, aggressive) -> boolean, lama.reason`  
-   Replacement for turtle.forward()
+   Replacement for `turtle.forward()`.
 * `lama.back(tries) -> boolean, lama.reason`  
-    Replacement for turtle.back()
+    Replacement for `turtle.back()`.
 * `lama.up(tries, aggressive) -> boolean, lama.reason`  
-    Replacement for turtle.up()
+    Replacement for `turtle.up()`.
 * `lama.down(tries, aggressive) -> boolean, lama.reason`  
-    Replacement for turtle.down()
+    Replacement for `turtle.down()`.
 * `lama.moveto(x, y, z, facing, tries, aggressive) -> boolean, lama.reason`  
     Makes the turtle move to the specified coordinates or waypoint. Will continue across reboots.
 * `lama.navigate(path, tries, aggressive) -> boolean, lama.reason`  
@@ -119,13 +119,13 @@ Rotation
 --------
 
 * `lama.turnRight() -> boolean`  
-    Replacement for turtle.turnRight()
+    Replacement for `turtle.turnRight()`.
 * `lama.turnLeft() -> boolean`  
-    Replacement for turtle.turnRight()
+    Replacement for `turtle.turnRight()`.
 * `lama.turnAround() -> boolean`  
-    Turns the turtle around
+    Turns the turtle around.
 * `lama.turn(towards) -> boolean`  
-    Turns the turtle to face in the specified direction
+    Turns the turtle to face in the specified direction.
 
 Note that all turning functions behave like the original ones in that they return immediately if they fail (they can only fail if the VM's event queue is full). Otherwise they're guaranteed to complete the operation successfully. For `lama.turn()` and `lama.turnAround()` it is possible that one of two needed turn commands has already been issued, when failing. The internal state will represent that however, i.e. `lama.getFacing()` will still be correct.
 
