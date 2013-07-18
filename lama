@@ -346,7 +346,7 @@ end
     @return true if the turtle moved successfully, (false, reason) if it failed
         and stopped somewhere along the way.
 ]]
-function goto(x, y, z, facing, tries, aggressive)
+function moveto(x, y, z, facing, tries, aggressive)
     return navigate({{x = x, y = y, z = z, facing = facing}}, tries, aggressive)
 end
 
@@ -650,8 +650,8 @@ end
     the remaining startup scripts will be executed and the result of the move
     command can be queried via lama.startupResult().
 
-    This just calls lama.goto() with the waypoint's coordinates, which in turn
-    is an alias for lama.navigate() for single length paths.
+    This just calls lama.moveto() with the waypoint's coordinates, which in
+    turn is an alias for lama.navigate() for single length paths.
 
     @param name the name of the waypoint to move to.
     @param tries how often to try to move for each single move. If this larger
@@ -663,9 +663,9 @@ end
         and stopped somewhere along the way.
     @throw if there is no waypoint with the specified name.
 ]]
-function waypoint.goto(name, tries, aggressive)
+function waypoint.moveto(name, tries, aggressive)
     x, y, z, facing = waypoint.get(name)
-    return goto(x, y, z, facing, tries, aggressive)
+    return moveto(x, y, z, facing, tries, aggressive)
 end
 
 -----------------------
@@ -786,7 +786,7 @@ state = {
     position = {x = 0, y = 0, z = 0, f = 0},
 
     -- List of registered waypoints.
-    waypoints = {}
+    waypoints = {},
 
     -- The current movement state, i.e. the direction we're moving in, the fuel
     -- level before the move started, the remaining tries and whether we're
@@ -794,7 +794,7 @@ state = {
     move = nil,
 
     -- The path we're currently moving along when performing a multi-block
-    -- movement (via lama.navigate() or lama.goto()/lama.waypoint.goto()).
+    -- movement (via lama.navigate() or lama.moveto()/lama.waypoint.moveto()).
     path = nil,
 
     -- This is used to keep track of how many times we tried to wrap the
@@ -802,7 +802,7 @@ state = {
     -- persistent state in case the API is loaded again (which would reset
     -- normal variables) and it helps us to check whether we need to unwrap
     -- the startup file when resuming after a reboot.
-    wrap = 0,
+    wrap = 0
 }
 
 -- Schemas for the state variable. This defines the expected value types and

@@ -133,7 +133,7 @@ do
 	assert(lama.waypoint.remove(somewhere))
 	assert(lama.waypoint.exists(somewhere) == false)
 
-	assert(lama.waypoint.goto(home))
+	assert(lama.waypoint.moveto(home))
 	assert(lama.navigate({home, home, home}))
 
 	assert(lama.waypoint.remove(home))
@@ -270,15 +270,15 @@ end
 -- Complex movement
 -------------------------------------------------------------------------------
 
-assert(lama.goto(x, y, z))
-assert(lama.goto(x, y, z, f))
+assert(lama.moveto(x, y, z))
+assert(lama.moveto(x, y, z, f))
 
 do
 	local p = {x = x, y = y, z = z, facing = f}
 	assert(lama.navigate({p, p, p}))
 end
 
--- TODO make lama.goto and lama.navigate actually move the turtle
+-- TODO make lama.moveto and lama.navigate actually move the turtle
 
 -- TODO interrupt movement somehow? perhaps via coroutine and unloading then
 --      reloading the API to trigger "resume" logic?

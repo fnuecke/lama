@@ -59,7 +59,7 @@ local function travel()
     	local name = table.remove(state)
         save()
     	print("Moving to '" .. name .. "'...")
-        local result, reason = lama.waypoint.goto(name)
+        local result, reason = lama.waypoint.moveto(name)
         if not result then
         	print("Failed moving to waypoint: " .. reason)
         	break

@@ -6,7 +6,7 @@ end
 local files = {
 	{
 		name = "lama",
-		url = "https://github.com/fnuecke/lama/raw/master/lama"
+		url = "https://github.com/fnuecke/lama/raw/master/lama-min"
 	},
 	{
 		name = "lama-conf",
