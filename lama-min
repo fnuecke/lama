@@ -1,8 +1,8 @@
 --[[
     LAMA - Location Aware Movement API - 2013 Sangar
 
-    This program is licensed under the Creative Commons BY-SA 3.0 license.
-    http://creativecommons.org/licenses/by-sa/3.0/
+    This program is licensed under the MIT license.
+    http://opensource.org/licenses/mit-license.php
 ]]
 
 -- The absolute path to this file. This is used for generating startup logic

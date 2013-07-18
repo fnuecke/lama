@@ -22,12 +22,6 @@ while true do
 end
 ```
 
-License
-=======
-
-This API is licensed under the [Creative Commons Attribution-ShareAlike 3.0 Unported License][license].
-[![Creative Commons License](http://i.creativecommons.org/l/by-sa/3.0/88x31.png)][license]
-
 Requirements
 ============
 
@@ -68,7 +62,8 @@ In both cases you will get the [minified version](lama-min), which is roughly on
 
 API
 ===
-Please see the [actual code](lama) for full documentation. It is rather well commented. While you're at it, have a look at the `lama.reason` table to see how the movement functions may fail.
+
+This list is just meant to provide a quick overview of the available functionality. Please see the [actual code](lama) for full documentation. It is rather well commented. While you're at it, have a look at the `lama.reason` table to see how the movement functions may fail.
 
 Constants
 -------
@@ -114,7 +109,7 @@ Movement
 * `lama.navigate(path, tries, aggressive) -> boolean, lama.reason`  
     Makes the turtle move along the specified path of coordinates and/or waypoints. Will continue across reboots.
 
-The parameters 'tries' and 'aggressive' for the movement functions do the following: if 'tries' is specified, the turtle will try as many times to remove any obstruction it runs into before failing. If 'aggressive' is true in addition to that, the turtle will not only try to dig out blocks but also attack entities that stand in its way (including the player).
+The parameters `tries` and `aggressive` for the movement functions do the following: if `tries` is specified, the turtle will try as many times to remove any obstruction it runs into before failing. If `aggressive` is true in addition to that, the turtle will not only try to dig out blocks but also attack entities that stand in its way.
 
 Regarding `lama.navigate()`, note that the facing of all non-terminal path nodes will be ignored to avoid unnecessary turning along the way.
 
@@ -130,7 +125,7 @@ Rotation
 * `lama.turn(towards) -> boolean`  
     Turns the turtle to face in the specified direction
 
-Note that all 'turning' functions behave like the original ones in that they return immediately if they fail (they can only fail if the VM's event queue is full). Otherwise they're guaranteed to complete the operation successfully. For `lama.turn()` and `lama.turnAround()` it is possible that one of two needed turn commands has already been issued, when failing. The internal state will represent that however, i.e. `lama.getFacing()` will still be correct.
+Note that all turning functions behave like the original ones in that they return immediately if they fail (they can only fail if the VM's event queue is full). Otherwise they're guaranteed to complete the operation successfully. For `lama.turn()` and `lama.turnAround()` it is possible that one of two needed turn commands has already been issued, when failing. The internal state will represent that however, i.e. `lama.getFacing()` will still be correct.
 
 Waypoints
 ---------
@@ -200,6 +195,12 @@ Changelog
   - Changed the format of the state file by splitting it into several files, to reduce file i/o during moves. The API will automatically upgrade old state files it finds.
   - Fixed and improved validation of state files.
   - Lots of refactoring to make the code more readable and easier to maintain.
+  - Switched to MIT license.
+
+License
+=======
+
+This API is licensed under the [MIT License][license], which basically means you can do with it as you please.
 
 
 [computercraft]: http://www.computercraft.info/
@@ -207,6 +208,6 @@ Changelog
 [forairan]: http://www.computercraft.info/forums2/index.php?/topic/3018-init-scripts-utility-to-allow-for-multiple-independent-startup-scripts/
 [forum post]: http://www.computercraft.info/forums2/index.php?/topic/13919-api-lama-location-aware-movement-api/
 [installer]: http://pastebin.com/q45K18dv
-[license]: http://creativecommons.org/licenses/by-sa/3.0/
+[license]: http://opensource.org/licenses/mit-license.php
 [luamin]: https://github.com/mathiasbynens/luamin
 [turtles]: http://www.computercraft.info/wiki/Turtle

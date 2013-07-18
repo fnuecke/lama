@@ -1,8 +1,8 @@
 --[[
     LAMA - Location Aware Movement API - 2013 Sangar
 
-    This program is licensed under the Creative Commons BY-SA 3.0 license.
-    http://creativecommons.org/licenses/by-sa/3.0/
+    This program is licensed under the MIT license.
+    http://opensource.org/licenses/mit-license.php
 
     The API will keep track of the turtle's position and facing, even across
     multiple games: the state is persistent. In particular it is very robust,
@@ -45,7 +45,7 @@
 
 -- The absolute path to this file. This is used for generating startup logic
 -- which initializes the API by loading it into the OS.
-local apiPath = "/lama"
+local apiPath = "/lama/lama"
 
 -- This is the name of the file in which we store our state, i.e. the position
 -- and facing of the turtle, as well as whether it is currently moving or not.
