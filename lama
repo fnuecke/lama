@@ -64,6 +64,12 @@ local stateFile = {
 -- that we don't try to re-parse them over and over again.
 local deleteInvalidStateFiles = true
 
+-- If this computer uses a multi-startup script (e.g. Forairan's or mine) this
+-- determins the 'priority' with which the API is initialized after a reboot.
+-- This should be an integer value in the interval [0, 99], where lower values
+-- represent a higher priority.
+local startupPriority = 10
+
 -- The filename of the file to backup any original startup file to when
 -- creating the startup file used to finish any running moves in case the
 -- turtle is forced to shut down during the move. This is only used if no
@@ -80,6 +86,17 @@ local startupBackupFile = "/.lama-startup-backup"
 -- Internal forward declarations. They have to be declared here so that
 -- functions can access them.
 local state, private
+
+-- If this API was loaded before, reuse it to avoid unnecessarily reloading the
+-- state and whatnot. In particular if some coroutine gets funny ideas like
+-- reloading it while we're performing a move...
+if lama then
+    local env = getfenv()
+    for k, v in pairs(lama) do
+        env[k] = v
+    end
+    return
+end
 
 -------------------------------------------------------------------------------
 -- Constants                                                                 --
@@ -226,16 +243,17 @@ function set(x, y, z, facing)
     end
 
     -- Type checks.
-    assert(type(x) == "number", "'x' must be a number")
-    assert(type(y) == "number", "'y' must be a number")
-    assert(type(z) == "number", "'z' must be a number")
-    assert(type(facing) == "number", "'facing' must be a number")
+    assert(private.isInteger(x), "'x' must be an integral number")
+    assert(private.isInteger(y), "'y' must be an integral number")
+    assert(private.isInteger(z), "'z' must be an integral number")
+    assert(private.isFacing(facing),
+        "'facing' must be one of the lama.side constants")
 
     local position = state.position
     position.x = x
     position.y = y
     position.z = z
-    position.f = facing % 4
+    position.f = facing
     private.save("position")
     return get()
 end
@@ -350,6 +368,9 @@ function moveto(x, y, z, facing, tries, aggressive)
     return navigate({{x = x, y = y, z = z, facing = facing}}, tries, aggressive)
 end
 
+-- Alias for moveto, usable as long as it's not a keyword, so why not.
+getfenv()["goto"] = moveto
+
 --[[
     Moves the turtle along the specified path.
 
@@ -385,14 +406,15 @@ function navigate(path, tries, aggressive)
     end
 
     -- Type checks.
-    assert(tries == nil or type(tries) == "number",
-        "'tries' must be a number or omitted")
+    assert(type(path) == "table", "'path' must be a table")
+    assert(tries == nil or private.isInteger(tries),
+        "'tries' must be an integral number or omitted")
     assert(aggressive == nil or type(aggressive) == "boolean",
         "'aggressive' must be a boolean or omitted")
 
     -- Resolve path to be all absolute and validate coordinates.
     local absPath = {}
-    for k,v in ipairs(path) do
+    for k, v in ipairs(path) do
         if type(v) == "string" then
             -- It's a waypoint. Add the coordinate to the list.
             local x, y, z, f = waypoint.get(v)
@@ -400,14 +422,15 @@ function navigate(path, tries, aggressive)
         elseif type(v) == "table" then
             -- It's a coordinate. Do some type checking.
             local x, y, z, f = v.x, v.y, v.z, v.facing
-            assert(type(x) == "number",
-                "'x' at index " .. k .. " must be a number")
-            assert(type(y) == "number",
-                "'y' at index " .. k .. " must be a number")
-            assert(type(z) == "number",
-                "'z' at index " .. k .. " must be a number")
-            assert(f == nil or type(f) == "number",
-                "'facing' at index " .. k .. " must be a number or omitted")
+            assert(private.isInteger(x),
+                "'x' at index " .. k .. " must be an integral number")
+            assert(private.isInteger(y),
+                "'y' at index " .. k .. " must be an integral number")
+            assert(private.isInteger(z),
+                "'z' at index " .. k .. " must be an integral number")
+            assert(f == nil or private.isFacing(f),
+                "'facing' at index " .. k ..
+                " must be one of the lama.side constants or omitted")
 
             -- Add the coordinate to the list.
             table.insert(absPath, {x = x, y = y, z = z, f = f})
@@ -479,7 +502,7 @@ end
         Only fails if the event queue is full.
 ]]
 function turnAround()
-    return turn(state.position.f + 2)
+    return turn((state.position.f + 2) % 4)
 end
 
 --[[
@@ -492,11 +515,10 @@ end
     @see lama.side
 ]]
 function turn(towards)
-    -- Type checks.
-    assert(type(towards) == "number", "'towards' must be a number")
+    -- Type check, ensuring it's in bounds.
+    assert(private.isFacing(towards),
+        "'towards' must be one of the lama.side constants")
 
-    -- Ensure new facing is in bounds.
-    towards = towards % 4
     -- Turn towards the target facing.
     local ids, position = {}, state.position
     while position.f ~= towards do
@@ -555,17 +577,21 @@ waypoint = {}
 ]]
 function waypoint.add(name, x, y, z, facing)
     -- Type checking.
-    assert(type(name) == "string", "'name' must be a string")
-    assert(x == nil or type(x) == "number", "'x' must be a number or omitted")
-    assert(y == nil or type(y) == "number", "'y' must be a number or omitted")
-    assert(z == nil or type(z) == "number", "'z' must be a number or omitted")
-    assert(facing == nil or type(facing) == "number",
-        "'facing' must be a number or omitted")
+    assert(type(name) == "string" and name ~= "",
+        "'name' must be a non-empty string")
+    assert(x == nil or private.isInteger(x),
+        "'x' must be an integral number or omitted")
+    assert(y == nil or private.isInteger(y),
+        "'y' must be an integral number or omitted")
+    assert(z == nil or private.isInteger(z),
+        "'z' must be an integral number or omitted")
+    assert(facing == nil or private.isFacing(facing),
+        "'facing' must be one of the lama.side constants or omitted")
 
     -- Default to current position; also take facing if we use the exact
     -- coordinates, i.e. we wouldn't have to move to reach the waypoint.
     local position = state.position
-    if x == nil and y == nil and z == nil then
+    if x == nil and y == nil and z == nil and facing == nil then
         facing = position.f
     end
     x = x or position.x
@@ -577,7 +603,7 @@ function waypoint.add(name, x, y, z, facing)
         x = math.floor(x),
         y = math.floor(y),
         z = math.floor(z),
-        f = facing and math.floor(facing) or nil
+        f = facing
     }
     private.save("waypoints")
     return wasOverwritten
@@ -606,6 +632,8 @@ end
     @return true if a waypoint of that name exists; false otherwise.
 ]]
 function waypoint.exists(name)
+    assert(type(name) == "string" and name ~= "",
+        "'name' must be a non-empty string")
     return state.waypoints[name] ~= nil
 end
 
@@ -667,6 +695,9 @@ function waypoint.moveto(name, tries, aggressive)
     x, y, z, facing = waypoint.get(name)
     return moveto(x, y, z, facing, tries, aggressive)
 end
+
+-- Alias for waypoint.moveto, usable as long as it's not a keyword, so why not.
+waypoint["goto"] = waypoint.moveto
 
 -----------------------
 -- Utility functions --
@@ -812,10 +843,10 @@ private.schema[version] = {
     position = {
         type = "table",
         properties = {
-            x = {type = "number"},
-            y = {type = "number"},
-            z = {type = "number"},
-            f = {type = "number"}
+            x = {type = "number", value = private.isInteger},
+            y = {type = "number", value = private.isInteger},
+            z = {type = "number", value = private.isInteger},
+            f = {type = "number", value = private.isFacing}
         }
     },
     waypoints = {
@@ -824,10 +855,11 @@ private.schema[version] = {
             type = "table",
             keytype = "string",
             properties = {
-                x = {type = "number"},
-                y = {type = "number"},
-                z = {type = "number"},
-                f = {type = "number", optional = true}
+                x = {type = "number", value = private.isInteger},
+                y = {type = "number", value = private.isInteger},
+                z = {type = "number", value = private.isInteger},
+                f = {type = "number", value = private.isFacing,
+                     optional = true}
             }
         }
     },
@@ -839,8 +871,8 @@ private.schema[version] = {
                 type = "number",
                 value = function(v) return private.direction[v] ~= nil end
             },
-            preMoveFuel = {type = "number"},
-            tries = {type = "number"},
+            preMoveFuel = {type = "number", value = private.isInteger},
+            tries = {type = "number", value = private.isInteger},
             aggressive = {type = "boolean"}
         }
     },
@@ -853,18 +885,19 @@ private.schema[version] = {
                 entries = {
                     type = "table",
                     properties = {
-                        x = {type = "number"},
-                        y = {type = "number"},
-                        z = {type = "number"},
-                        f = {type = "number", optional = true}
+                        x = {type = "number", value = private.isInteger},
+                        y = {type = "number", value = private.isInteger},
+                        z = {type = "number", value = private.isInteger},
+                        f = {type = "number", value = private.isFacing,
+                             optional = true}
                     }
                 }
             },
-            tries = {type = "number"},
+            tries = {type = "number", value = private.isInteger},
             aggressive = {type = "boolean"}
         }
     },
-    wrap = {type = "number"}
+    wrap = {type = "number", value = private.isInteger}
 }
 
 -- Schema for version 1.0 state files (used for upgrading).
@@ -874,10 +907,10 @@ private.schema["1.0"] = {
         position = {
             type = "table",
             properties = {
-                x = {type = "number"},
-                y = {type = "number"},
-                z = {type = "number"},
-                f = {type = "number"}
+                x = {type = "number", value = private.isInteger},
+                y = {type = "number", value = private.isInteger},
+                z = {type = "number", value = private.isInteger},
+                f = {type = "number", value = private.isFacing}
             }
         },
         moving = {
@@ -892,8 +925,8 @@ private.schema["1.0"] = {
                 return true
             end
         },
-        preMoveFuel = {type = "number"},
-        tries = {type = "number"},
+        preMoveFuel = {type = "number", value = private.isInteger},
+        tries = {type = "number", value = private.isInteger},
         aggressive = {type = "boolean"}
     }
 }
@@ -985,6 +1018,30 @@ function private.validate(value, schema)
     return validate(value, schema, "value")
 end
 
+--[[
+    Checks if the specified number is integral.
+
+    @param value the number to check.
+    @return true if the number is integral; false otherwise.
+    @private
+]]
+function private.isInteger(value)
+    return type(value) == "number" and
+           value == math.floor(value)
+end
+
+--[[
+    Checks if the specified number is a valid facing.
+
+    @param value the number to check.
+    @return true if the number is a valid facing; false otherwise.
+    @private
+]]
+function private.isFacing(value)
+    return type(value) == "number" and
+           private.isInteger(value) and value >= 0 and value < 4
+end
+
 -------------------------------------------------------------------------------
 -- State saving/loading                                                      --
 -------------------------------------------------------------------------------
@@ -1014,32 +1071,43 @@ function private.load()
     end
 
     -- Utility function for loading single sections.
-    local function load(filename, schema, default)
+    local function load(section)
+        local filename = stateFile[section]
+        if not fs.exists(filename) then
+            return true
+        end
+        assert(not fs.isDir(filename),
+            "Invalid state filename '" .. filename .. "': it's a folder.")
+
         local success, result = private.unserialize(filename)
         if success then
             -- Validate the read state.
-            local valid, reason = private.validate(result, schema)
-            if not valid then
+            local valid, reason = private.validate(result,
+                private.schema[version][section])
+            if valid then
+                -- All green, keep the new state.
+                state[section] = result
+                return true
+            else
                 if deleteInvalidStateFiles then
                     print("LAMA: Invalid file '" .. filename ..
-                        "' (" .. reason .. "), deleting and ignoring it.")
-                    fs.delete(filename)
+                        "' (" .. reason .. "), deleting and resetting.")
                 else
                     print("LAMA: Invalid file '" .. filename ..
-                        "' (" .. reason .. "), ignoring it.")
+                        "' (" .. reason .. "), resetting.")
                 end
-            else
-                return result
             end
         end
-        return default
+        return false
     end
 
     -- Read all state sections one by one.
-    for section, filename in pairs(stateFile) do
-        state[section] = load(filename,
-                              private.schema[version][section],
-                              state[section])
+    for section, _ in pairs(stateFile) do
+        -- If one of the state files is invalid we reset the complete state.
+        if not load(section) then
+            private.reset()
+            return
+        end
     end
 end
 
@@ -1051,11 +1119,6 @@ end
     @private
 ]]
 function private.unserialize(filename)
-    -- Skip if no such file exists.
-    if not fs.exists(filename) or fs.isDir(filename) then
-        return false
-    end
-
     -- Read the text data from the file.
     local file = fs.open(filename, "r")
     local data = file.readAll()
@@ -1075,6 +1138,11 @@ end
     @private
 ]]
 function private.upgrade()
+    -- Skip if no state file of the expected old name exists.
+    if not fs.exists(stateFile.position) or fs.isDir(stateFile.position) then
+        return false
+    end
+
     -- Try to parse the 'main' state file.
     local success, result = private.unserialize(stateFile.position)
     if not success or not private.validate(result, private.schema["1.0"]) then
@@ -1107,6 +1175,33 @@ function private.upgrade()
     return true
 end
 
+--[[
+    Resets our internal state.
+
+    This is used if we run into any unexpected errors, for example invalid
+    state files or an unexpected fuel level on startup.
+
+    @private
+]]
+function private.reset()
+    state.position.x = 0
+    state.position.y = 0
+    state.position.z = 0
+    state.position.f = 0
+    state.waypoints = {}
+    state.move = nil
+    state.path = nil
+    state.wrap = 0
+
+    if deleteInvalidStateFiles then
+        fs.delete(stateFile.position)
+        -- No fs.delete(stateFile.waypoints). Keep the waypoints intact.
+        fs.delete(stateFile.move)
+        fs.delete(stateFile.path)
+        fs.delete(stateFile.wrap)
+    end
+end
+
 -------------------------------------------------------------------------------
 -- Resume command on startup stuff                                           --
 -------------------------------------------------------------------------------
@@ -1127,6 +1222,11 @@ local startupHandlers = {
     -- when the startup script is run. This has rather bad performance because
     -- it adds one file write, one deletion and two moves to each move command.
     default = {
+        init = function()
+            assert(type(startupBackupFile) == "string" and
+                startupBackupFile ~= "",
+                "The setting 'startupBackupFile' must be a non-empty string.")
+        end,
         wrap = function()
             local haveStartup = fs.exists("/startup")
             if haveStartup then
@@ -1158,8 +1258,12 @@ local startupHandlers = {
     -- there were no pending moves, so performance impact is minimal.
     forairan = {
         init = function()
-            -- Overwrite the startup file since the apiPath may have changed.
-            local f = fs.open("/init-scripts/00_lama", "w")
+            -- Overwrite the startup file since the apiPath or the startup
+            -- script's priority may have changed.
+            local priority = type(startupPriority) == "number" and
+                             string.format("%2d") or
+                             tostring(startupPriority)
+            local f = fs.open("/init-scripts/" .. priority .. "_lama", "w")
             f.write("os.loadAPI('" .. apiPath .. "')")
             f.close()
         end,
@@ -1168,21 +1272,48 @@ local startupHandlers = {
             -- folder exists.
             return fs.exists("/init-scripts") and fs.isDir("/init-scripts")
         end
+    },
+
+    -- Implementation for my own little startup API. This will only create
+    -- a startup script once, which has no side effects if there were no
+    -- pending moves, so performance impact is minimal.
+    sangar = {
+        init = function()
+            -- Overwrite the startup file since the apiPath or the startup
+            -- script's priority may have changed.
+            startup.remove("lama")
+            startup.addString("os.loadAPI('" .. apiPath .. "')",
+                              "lama", startupPriority)
+        end,
+        test = function()
+            -- Check if the startup API is loaded.
+            return startup ~= nil and startup.version ~= nil
+        end
     }
 }
 
--- Detect which handler to use, initialize to default in case nothing applies.
-private.startupHandler = startupHandlers.default
-for _,handler in pairs(startupHandlers) do
-    if handler.test() then
-        private.startupHandler = handler
-        break
-    end
-end
+--[[
+    Initializes startup script management.
+    @private
+]]
+function private.initStartup()
+    -- Validate configuration related to startup.
+    assert(private.isInteger(startupPriority),
+        "The setting 'startupPriority' must be an integral number.")
 
--- Run handler's init code.
-if private.startupHandler.init then
-    private.startupHandler.init()
+    -- Detect which handler to use, initialized to default as fallback.
+    private.startupHandler = startupHandlers.default
+    for _, handler in pairs(startupHandlers) do
+        if handler.test() then
+            private.startupHandler = handler
+            break
+        end
+    end
+
+    -- Run handler's init code.
+    if private.startupHandler.init then
+        private.startupHandler.init()
+    end
 end
 
 --[[
@@ -1608,117 +1739,103 @@ end
 -------------------------------------------------------------------------------
 
 -- This API makes no sense when used on anything other than a turtle.
-if not turtle then
-    error("Can only run on turtles.")
-end
+assert(turtle, "Can only run on turtles.")
 
 -- Check if this computer has a label. Because if it hasn't this is pointless.
-if not os.getComputerLabel() then
-    error("Turtle has no label, required for state persistence.")
-end
+assert(os.getComputerLabel(),
+    "Turtle has no label, required for state persistence.")
 
 -- Check if turtles use fuel. If they don't, we cannot reliably check if the
 -- turtle moved after it was forcibly shut down.
-if turtle.getFuelLevel() == "unlimited" then
-    error("Turtles must use fuel for this API to work correctly.")
-end
+assert(turtle.getFuelLevel() ~= "unlimited",
+    "Turtles must use fuel for this API to work correctly.")
+
+-- Make sure the apiPath variable is set.
+assert(type(apiPath) == "string" and apiPath ~= "",
+    "The setting 'apiPath' must be a non-empty string.")
 
 -- Make sure the apiPath variable is plausible.
-if not fs.exists(apiPath) or fs.isDir(apiPath) then
-    error("No file found at 'apiPath', please make sure it points to the API.")
-end
+assert(fs.exists(apiPath) and not fs.isDir(apiPath),
+    "No file found at 'apiPath', please make sure it points to the API.")
 
 -------------------------------------------------------------------------------
 -- Initialization                                                            --
 -------------------------------------------------------------------------------
 
+-- Initialize startup script management.
+private.initStartup()
+
 -- Load state, if any.
 private.load()
 
--- Finish any active moves. Only do this on the first API load.
-if not lama then
-    -- Make sure any active movement can complete.
-    os.sleep(0.5) -- Wait a bit so that at least one event queue slot is free.
-    turtle.detect() -- Process event queue (blocks until processed).
+-- Finish any active moves. Make sure any active movement can complete.
+os.sleep(0.1) -- Wait a bit so that at least one event queue slot is free.
+turtle.detect() -- Process event queue (blocks until processed).
 
-    -- Force unwrapping if we have at least one level of startup wrapper.
-    private.unwrapStartup(true)
+-- Force unwrapping if we have at least one level of startup wrapper.
+private.unwrapStartup(true)
 
-    -- Check if we performed a single move and finish any pending multi-try
-    -- single moves.
-    if state.move then
-        -- Here is the trick: if we did complete a move started directly before
-        -- the turtle was shut down (server quit or chunk unload) then we
-        -- expect to have exactly one fuel less than before, since only
-        -- successful moves use up (exactly one) fuel.
-        if turtle.getFuelLevel() == state.move.preMoveFuel then
-            -- No fuel was used, so we didn't move. This can only fail if we
-            -- refuel directly after moving, which cannot happen unless its
-            -- pretty much forced using coroutines... so yeah, this will do.
+-- Check if we performed a single move and finish any pending multi-try
+-- single moves.
+if state.move then
+    -- Here is the trick: if we did complete a move started directly before
+    -- the turtle was shut down (server quit or chunk unload) then we
+    -- expect to have exactly one fuel less than before, since only
+    -- successful moves use up (exactly one) fuel.
+    if turtle.getFuelLevel() == state.move.preMoveFuel then
+        -- No fuel was used, so we didn't move. This can only fail if we
+        -- refuel directly after moving, which cannot happen unless its
+        -- pretty much forced using coroutines... so yeah, this will do.
 
-            -- If we have some tries left, continue trying.
-            if state.move.tries > 0 then
-                local result, reason =
-                    private.move(state.move.direction,
-                                 state.move.tries,
-                                 state.move.aggressive)
-                private.startupResult = {
-                    result = result,
-                    reason = reason
-                }
-            else
-                private.startupResult = {
-                    result = false,
-                    reason = private.tryGetReason(state.move.direction)
-                }
-                -- We do this after trying to get the reason, because that can
-                -- yield (detect) so we might lose the result when we're reset
-                -- in that phase.
-                private.endMove()
-            end
-        elseif turtle.getFuelLevel() == state.move.preMoveFuel - 1 then
-            -- We used one fuel so we made our move! As with the case above,
-            -- this can only be wrong if refueling is involved somewhere,
-            -- which, again, can only happen using coroutines.
-            private.updateState()
+        -- If we have some tries left, continue trying.
+        if state.move.tries > 0 then
+            local result, reason =
+                private.move(state.move.direction,
+                             state.move.tries,
+                             state.move.aggressive)
+            private.startupResult = {
+                result = result,
+                reason = reason
+            }
+        else
+            private.startupResult = {
+                result = false,
+                reason = private.tryGetReason(state.move.direction)
+            }
+            -- We do this after trying to get the reason, because that can
+            -- yield (detect) so we might lose the result when we're reset
+            -- in that phase.
             private.endMove()
-        else
-            -- This should not be possible if the API is used correctly, i.e.
-            -- it is not called from multiple coroutines and no other movement
-            -- functions of the turtle are used.
-            fs.delete(stateFile.position)
-            -- No fs.delete(stateFile.waypoints). Keep the waypoints intact.
-            fs.delete(stateFile.move)
-            fs.delete(stateFile.path)
-            fs.delete(stateFile.wrap)
-            error("Unexpected fuel state after reboot; invalid API use?")
         end
+    elseif turtle.getFuelLevel() == state.move.preMoveFuel - 1 then
+        -- We used one fuel so we made our move! As with the case above,
+        -- this can only be wrong if refueling is involved somewhere,
+        -- which, again, can only happen using coroutines.
+        private.updateState()
+        private.endMove()
+    else
+        -- This should not be possible if the API is used correctly, i.e.
+        -- it is not called from multiple coroutines and no other movement
+        -- functions of the turtle are used.
+        private.reset()
+        error("Unexpected fuel state after reboot; invalid API use?")
     end
+end
 
-    -- If we're currently traveling towards a target location, continue doing
-    -- so after resolving possibly active single moves above.
-    if state.path then
-        -- See if the previous move was successful. This isn't *really*
-        -- necessary, because we could just try to continue moving, which would
-        -- then result in the same failure, again. But we can avoid repeating
-        -- work, so let's do it like this.
-        local result, reason = startupResult()
-        if result then
-            -- Everything is still OK, continue moving.
-            private.navigate()
-        else
-            -- Something went wrong, exit travel mode. We don't have to touch
-            -- the startup result, it's obviously already set.
-            private.endNavigate()
-        end
-    end
-else
-    -- API was loaded before, copy over startup result to keep it alive.
-    local result, reason = lama.startupResult()
-    if not result then
-        private.startupResult = {
-            result = result,
-            reason = reason
-        }
+-- If we're currently traveling towards a target location, continue doing
+-- so after resolving possibly active single moves above.
+if state.path then
+    -- See if the previous move was successful. This isn't *really*
+    -- necessary, because we could just try to continue moving, which would
+    -- then result in the same failure, again. But we can avoid repeating
+    -- work, so let's do it like this.
+    local result, reason = startupResult()
+    if result then
+        -- Everything is still OK, continue moving.
+        private.navigate()
+    else
+        -- Something went wrong, exit travel mode. We don't have to touch
+        -- the startup result, it's obviously already set.
+        private.endNavigate()
     end
 end
