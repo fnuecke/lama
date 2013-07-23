@@ -1313,8 +1313,8 @@ local startupHandlers = {
             -- Overwrite the startup file since the apiPath or the startup
             -- script's priority may have changed.
             startup.remove("lama")
-            startup.addString("os.loadAPI('" .. apiPath .. "')",
-                              "lama", startupPriority)
+            startup.addString("lama", "os.loadAPI('" .. apiPath .. "')",
+                              startupPriority)
         end,
         test = function()
             -- Check if the startup API is loaded.

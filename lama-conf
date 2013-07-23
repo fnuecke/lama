@@ -10,72 +10,21 @@
 os.loadAPI("lama")
 
 -------------------------------------------------------------------------------
--- Command logic                                                             --
--------------------------------------------------------------------------------
-
--- List of command line arguments, to access them via indexes without select().
-local args = {...}
-
--- Forward declaration of table containing commands.
-local commands
-
---[[
-    Looks for a command with the specified name in the list of commands.
-
-    @param name the name of the command to look for.
-    @return the command on success; nil otherwise.
-]]
-local function findCommand(name)
-    if name then
-        name = string.lower(name)
-        for _,command in ipairs(commands) do
-            if command.name == name then
-                return command
-            end
-        end
-    end
-    return nil
-end
-
---[[
-    Automatically generates a usage description, based on the command list.
-]]
-local function usage()
-    print("Usage: " .. shell.getRunningProgram() .. " <command> <args...>")
-    local commandNames = {}
-    for _,v in ipairs(commands) do
-        table.insert(commandNames, v.name)
-    end
-    print("Commands: " .. table.concat(commandNames, ", "))
-    print("Use '" .. shell.getRunningProgram() ..
-          " help command' to get more information on a specific command.")
-end
-
-local function run()
-    local command = findCommand(args[1])
-    if #args == 0 or command == nil then
-        usage()
-    else
-        table.remove(args, 1)
-        command.call(unpack(args))
-    end
-end
-
--------------------------------------------------------------------------------
 -- Commands                                                                  --
 -------------------------------------------------------------------------------
 
 -- Forward declation for helper function namespace.
 local private = {}
 
--- No named keys to keep the order intact.
+-- List of all commands of this program. Keep the variable declaration
+-- separate, so that it can be referenced in the help callback.
+local commands
 commands = {
-    {
-        name = "help",
+    help = {
         help = "Shows the help text for the specified command.",
         args = {{"command", "The command to get help on."}},
         call = function(name)
-            local command = findCommand(name)
+            local command = commands[name]
             if command == nil then
                 print("No such command.")
             else
@@ -89,16 +38,14 @@ commands = {
             end
         end
     },
-    {
-        name = "get",
+    get = {
         help = "Prints the current position and facing of the turtle.",
         call = function()
             write("Position = ")
             private.display(lama.get())
         end
     },
-    {
-        name = "set",
+    set = {
         help = "Sets the absolute coordinates of the turtle.",
         args = {
             {"x", "The X coordinate."},
@@ -112,16 +59,14 @@ commands = {
             private.display(lama.set(x, y, z, f))
         end
     },
-    {
-        name = "reset",
+    reset = {
         help = "Alias for 'set 0 0 0 0'.",
         call = function()
             write("Position = ")
             private.display(lama.set(0, 0, 0, 0))
         end
     },
-    {
-        name = "list",
+    list = {
         help = "Prints a list of known waypoints.",
         call = function()
             for name, x, y, z, f in lama.waypoint.iter() do
@@ -130,8 +75,7 @@ commands = {
             end
         end
     },
-    {
-        name = "add",
+    add = {
         help = "Adds a new waypoint.",
         args = {
             {"name", "The name of the waypoint."},
@@ -149,8 +93,7 @@ commands = {
             end
         end
     },
-    {
-        name = "remove",
+    remove = {
         help = "Removes a waypoint.",
         args = {{"name", "The name of the waypoint."}},
         call = function(name)
@@ -214,7 +157,41 @@ function private.display(x, y, z, f)
 end
 
 -------------------------------------------------------------------------------
+-- Command logic                                                             --
+-------------------------------------------------------------------------------
+
+--[[
+    Automatically generates a usage description, based on the command list.
+]]
+local function usage()
+    local programName = fs.getName(shell.getRunningProgram())
+    print("Usage: " .. programName .. " <command> <args...>")
+    local names = {}
+    for name, _ in pairs(commands) do
+        table.insert(names, name)
+    end
+    table.sort(names)
+    print("Commands: " .. table.concat(names, ", "))
+    print("Use '" .. programName ..
+          " help <command>' to get more information on a specific command.")
+end
+
+--[[
+    Handles command line arguments and executes the corresponding command.
+]]
+local function run(...)
+    local args = {...}
+    local command = commands[args[1]]
+    if #args == 0 or command == nil then
+        usage()
+    else
+        table.remove(args, 1)
+        command.call(unpack(args))
+    end
+end
+
+-------------------------------------------------------------------------------
 -- Initialization                                                            --
 -------------------------------------------------------------------------------
 
-run()
+run(...)
