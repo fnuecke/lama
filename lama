@@ -83,10 +83,6 @@ local startupBackupFile = "/.lama-startup-backup"
 -------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
 
--- Internal forward declarations. They have to be declared here so that
--- functions can access them.
-local state, private
-
 -- If this API was loaded before, reuse it to avoid unnecessarily reloading the
 -- state and whatnot. In particular if some coroutine gets funny ideas like
 -- reloading it while we're performing a move...
@@ -97,6 +93,10 @@ if lama then
     end
     return
 end
+
+-- Internal forward declarations. They have to be declared here so that
+-- functions can access them.
+local state, private
 
 -------------------------------------------------------------------------------
 -- Constants                                                                 --
