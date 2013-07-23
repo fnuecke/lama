@@ -56,7 +56,8 @@ local function run()
     if #args == 0 or command == nil then
         usage()
     else
-        command.call()
+        table.remove(args, 1)
+        command.call(unpack(args))
     end
 end
 
@@ -72,12 +73,19 @@ commands = {
     {
         name = "help",
         help = "Shows the help text for the specified command.",
-        call = function()
-            local command = findCommand(args[2])
+        args = {{"command", "The command to get help on."}},
+        call = function(name)
+            local command = findCommand(name)
             if command == nil then
                 print("No such command.")
             else
                 print(command.help)
+                if command.args and #command.args > 0 then
+                    print("Parameters:")
+                    for _, arg in ipairs(command.args) do
+                        print(" " .. arg[1] .. " - " .. arg[2])
+                    end
+                end
             end
         end
     },
@@ -91,9 +99,15 @@ commands = {
     },
     {
         name = "set",
-        help = "Sets the absolute coordinates the turtle believes itself to be at.",
-        call = function()
-            local x, y, z, f = private.parse(2)
+        help = "Sets the absolute coordinates of the turtle.",
+        args = {
+            {"x", "The X coordinate."},
+            {"y", "The Y coordinate."},
+            {"z", "The Z coordinate."},
+            {"facing", "The facing."}
+        },
+        call = function(x, y, z, f)
+            x, y, z, f = private.validate(x, y, z, f)
             write("Position = ")
             private.display(lama.set(x, y, z, f))
         end
@@ -119,9 +133,16 @@ commands = {
     {
         name = "add",
         help = "Adds a new waypoint.",
-        call = function()
-            local x, y, z, f = private.parse(3, true)
-            if lama.waypoint.add(args[2], x, y, z, f) then
+        args = {
+            {"name", "The name of the waypoint."},
+            {"x", "The X coordinate."},
+            {"y", "The Y coordinate."},
+            {"z", "The Z coordinate."},
+            {"facing", "The optional facing."}
+        },
+        call = function(name, x, y, z, f)
+            x, y, z, f = private.validate(x, y, z, f, true)
+            if lama.waypoint.add(name, x, y, z, f) then
                 print("Updated waypoint.")
             else
                 print("Added waypoint.")
@@ -131,8 +152,9 @@ commands = {
     {
         name = "remove",
         help = "Removes a waypoint.",
-        call = function()
-            if not lama.waypoint.remove(args[2]) then
+        args = {{"name", "The name of the waypoint."}},
+        call = function(name)
+            if not lama.waypoint.remove(name) then
                 print("No such waypoint.")
             else
                 print("Removed waypoint.")
@@ -151,11 +173,7 @@ commands = {
     @param start the index at which to start parsing.
     @param facingOptional whether the facing is optional.
 ]]
-function private.parse(start, facingOptional)
-    -- Get the raw string values.
-    local x, y, z, f = args[start], args[start + 1],
-                       args[start + 2], args[start + 3]
-
+function private.validate(x,y , z, f, facingOptional)
     -- Make sure we have all we need.
     if x == nil or y == nil or z == nil or
        (f == nil and not facingOptional)
