@@ -32,9 +32,9 @@ This API only works on turtles that have an ID and that use fuel. The ID is requ
 Recommended
 -----------
 
-The API will create a startup file while performing a move, to allow completion of multi-try moves after reboot. If there's an original startup file, it will be backed up and after API initialization/move completion will be restored an executed. This obviously introduces additional file i/o overhead for each move. To avoid that, it is highly recommended to use [Forairan's init-scripts][forairan] startup file. If present (or rather: if the `/init-scripts` folder exists) the API will instead create a startup script in the `/init-scripts` folder once, with no additional file i/o overhead when moving.
+The API will create a startup file while performing a move, to allow completion of multi-try moves after reboot. If there's an original startup file, it will be backed up and after API initialization/move completion will be restored an executed. This obviously introduces additional file i/o overhead for each move. To avoid that, it is highly recommended to use some multi-startup-script solution, such as [Forairan's init-scripts][forairan] startup file or [my startup API][startup]. If present, LAMA will instead create a startup script for the multi-script-environment once, with no additional file i/o overhead when moving.
 
-If you'd like to see compatibility with other multi-startup-script systems (I have not dabbled with custom OSs much, yet), let me know - or even better implement it yourself and submit a pull request. It's pretty easy to add more, as long as there's a way to detect the used script/system. Should you wish to give it a go, search for `local startupHandlers`, which is the table containing the logic for different startup handlers.
+If you'd like to see compatibility with other multi-startup-script systems (I have not dabbled with custom OSs much, yet), let me know - or even better: implement it yourself and submit a pull request. It's pretty easy to add more, as long as there's a way to detect the used script/system. Should you wish to give it a go, search for `local startupHandlers`, which is the table containing the logic for different startup handlers.
 
 Installation
 ============
@@ -190,6 +190,14 @@ Still, this is software, and testing is a tricky business, so it's very possible
 Changelog
 =========
 
+- Version 1.2
+  - **Breaking Change:** Added a setting `useMinecraftCoordinates` and it defaults to `true`. *Set it back to `false` if you don't want to adjust your scripts*. I totally forgot to check what kind of coordinate system Minecraft uses internally (i.e. what you see when you enable the debug screen with F3). So now the script uses one that's different. If this setting is `true`, it will make all API functions return and accept coordinates of Minecraft's coordinate system.
+  Internally the coordinate system used will always be the custom one, so you can upgrade and switch this setting on and off without breaking any state files.
+  - Added setting `startupPriority` which allows setting the desired initialization priority of the API in multi-startup-script environments.
+  - Added aliases `lama.goto()` for `lama.moveto()` and `lama.waypoint.goto()` for `lama.waypoint.moveto()`. Use at your own peril, since `goto` is a keyword in Lua 5.2, so in the case ComputerCraft ever updates its Lua implementation these will become unusable.
+  - Added code to detect [my startup API][startup] as alternative to Forairan's init-scripts.
+  - Tightened up value validation here and there to avoid state corruption/weirdness (mostly: checking whether coordinates are integers).
+
 - Version 1.1
   - Added `lama.moveto()` function which allows issuing multiblock movement commands. The turtle will try to reach the specified coordinate by moving in straight lines; if you want smart navigation/pathfinding you'll have to use some other API on top of this one, or write it yourself, since I feel that's a bit beyond the scope of this API.
   - Added possibility to store waypoints (position plus facing). The related functions can be found in the lama.waypoint namespace.
@@ -212,7 +220,7 @@ This API is licensed under the [MIT License][license], which basically means you
 [event post]: http://www.computercraft.info/forums2/index.php?/topic/13855-events-across-world-reload/
 [forairan]: http://www.computercraft.info/forums2/index.php?/topic/3018-init-scripts-utility-to-allow-for-multiple-independent-startup-scripts/
 [forum post]: http://www.computercraft.info/forums2/index.php?/topic/13919-api-lama-location-aware-movement-api/
-[installer]: http://pastebin.com/q45K18dv
 [license]: http://opensource.org/licenses/mit-license.php
 [luamin]: https://github.com/mathiasbynens/luamin
+[startup]: https://github.com/fnuecke/ccapis
 [turtles]: http://www.computercraft.info/wiki/Turtle

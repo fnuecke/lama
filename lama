@@ -45,7 +45,7 @@
 
 -- The absolute path to this file. This is used for generating startup logic
 -- which initializes the API by loading it into the OS.
-local apiPath = "/lama/lama"
+local apiPath = "/lama"
 
 -- This is the name of the file in which we store our state, i.e. the position
 -- and facing of the turtle, as well as whether it is currently moving or not.
@@ -80,7 +80,7 @@ local startupBackupFile = "/.lama-startup-backup"
 -- Whether to use the same coordinate system Minecraft uses internally. This
 -- only influences how the API works from the outside; the state file will
 -- always use the internal coordinate system, to provide compatibility.
-local useMinecraftCoordinates = false
+local useMinecraftCoordinates = true
 
 -------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
@@ -108,7 +108,7 @@ local state, private
 -------------------------------------------------------------------------------
 
 -- The current version of the API.
-version = "1.1"
+version = "1.2"
 
 -- Constants for a turtle's facing, used for turn() and get()/set(). Note that
 -- these are adjusted in the initialization of the API if the setting
