@@ -77,6 +77,11 @@ local startupPriority = 10
 -- You may want to change this if it collides with another program or API.
 local startupBackupFile = "/.lama-startup-backup"
 
+-- Whether to use the same coordinate system Minecraft uses internally. This
+-- only influences how the API works from the outside; the state file will
+-- always use the internal coordinate system, to provide compatibility.
+local useMinecraftCoordinates = false
+
 -------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
 -- API variables and methods follow; do not change them.                     --
@@ -105,11 +110,15 @@ local state, private
 -- The current version of the API.
 version = "1.1"
 
--- Constants for a turtle's facing, used for turn() and get()/set().
+-- Constants for a turtle's facing, used for turn() and get()/set(). Note that
+-- these are adjusted in the initialization of the API if the setting
+-- useMinecraftCoordinates is set to true.
 side = {forward = 0, right = 1, back  = 2, left = 3,
         north   = 0, east  = 1, south = 2, west = 3,
         front   = 0,
-        ["0"]   = 0, ["1"] = 1, ["2"] = 2, ["3"] = 3}
+        ["0"]   = 0, ["1"] = 1, ["2"] = 2, ["3"] = 3,
+        -- Reverse mapping for name lookup based on the used coordinate system.
+        [0] = "north", [1] = "east", [2] = "south", [3] = "west"}
 
 -- Reasons for movement failure. One of these is returned as a second value by
 -- the movement functions (forward, back, up, down) if they fail.
@@ -174,7 +183,7 @@ Note: all coordinates are initially relative to the turtle's origin,
 ]]
 function get()
     local position = state.position
-    return position.x, position.y, position.z, position.f
+    return private.toMC(position.x, position.y, position.z, position.f)
 end
 
 --[[
@@ -183,7 +192,7 @@ end
     @return the turtle's current X position.
 ]]
 function getX()
-    return state.position.x
+    return select(1, get())
 end
 
 --[[
@@ -192,7 +201,7 @@ end
     @return the turtle's current Y position.
 ]]
 function getY()
-    return state.position.y
+    return select(2, get())
 end
 
 --[[
@@ -201,7 +210,7 @@ end
     @return the turtle's current Z position.
 ]]
 function getZ()
-    return state.position.z
+    return select(3, get())
 end
 
 --[[
@@ -210,8 +219,7 @@ end
     @return a vector instance representing the turtle's position.
 ]]
 function getPosition()
-    local position = state.position
-    return vector.new(position.x, position.y, position.z)
+    return vector.new(get())
 end
 
 --[[
@@ -221,7 +229,7 @@ end
     @see lama.side
 ]]
 function getFacing()
-    return state.position.f
+    return select(4, get())
 end
 
 --[[
@@ -248,6 +256,9 @@ function set(x, y, z, facing)
     assert(private.isInteger(z), "'z' must be an integral number")
     assert(private.isFacing(facing),
         "'facing' must be one of the lama.side constants")
+
+    -- Convert coordinates.
+    x, y, z, facing = private.fromMC(x, y, z, facing)
 
     local position = state.position
     position.x = x
@@ -417,7 +428,7 @@ function navigate(path, tries, aggressive)
     for k, v in ipairs(path) do
         if type(v) == "string" then
             -- It's a waypoint. Add the coordinate to the list.
-            local x, y, z, f = waypoint.get(v)
+            local x, y, z, f = private.fromMC(waypoint.get(v))
             table.insert(absPath, {x = x, y = y, z = z, f = f})
         elseif type(v) == "table" then
             -- It's a coordinate. Do some type checking.
@@ -431,6 +442,9 @@ function navigate(path, tries, aggressive)
             assert(f == nil or private.isFacing(f),
                 "'facing' at index " .. k ..
                 " must be one of the lama.side constants or omitted")
+
+            -- Convert coordinates.
+            x, y, z, f = private.fromMC(x, y, z, f)
 
             -- Add the coordinate to the list.
             table.insert(absPath, {x = x, y = y, z = z, f = f})
@@ -502,7 +516,7 @@ end
         Only fails if the event queue is full.
 ]]
 function turnAround()
-    return turn((state.position.f + 2) % 4)
+    return turn((getFacing() + 2) % 4)
 end
 
 --[[
@@ -521,14 +535,14 @@ function turn(towards)
 
     -- Turn towards the target facing.
     local ids, position = {}, state.position
-    while position.f ~= towards do
+    while getFacing() ~= towards do
         -- We do not use the turnLeft() and turnRight() functions, because we
         -- want full control: we push all native events in one go and then wait
         -- for all of them to finish. This way we can stick to the pattern of
         -- immediately returning (non-yielding) if the turn fails due to a full
         -- event queue.
         local id
-        if towards == (position.f + 1) % 4 then
+        if towards == (getFacing() + 1) % 4 then
             -- Special case for turning clockwise, to avoid turning three times
             -- when once is enough, in particular for the left -> forward case,
             -- where we wrap around (from 3 -> 0).
@@ -587,6 +601,9 @@ function waypoint.add(name, x, y, z, facing)
         "'z' must be an integral number or omitted")
     assert(facing == nil or private.isFacing(facing),
         "'facing' must be one of the lama.side constants or omitted")
+
+    -- Convert coordinates.
+    x, y, z, facing = private.fromMC(x, y, z, facing)
 
     -- Default to current position; also take facing if we use the exact
     -- coordinates, i.e. we wouldn't have to move to reach the waypoint.
@@ -648,7 +665,7 @@ function waypoint.get(name)
     assert(waypoint.exists(name),
         "no such waypoint, '" .. tostring(name) .. "'")
     local w = state.waypoints[name]
-    return w.x, w.y, w.z, w.f
+    return private.toMC(w.x, w.y, w.z, w.f)
 end
 
 --[[
@@ -660,11 +677,13 @@ end
     @return an iterator over all known waypoints.
 ]]
 function waypoint.iter()
-    local name, coordinate
+    local name
     return function()
+        local coordinate
         name, coordinate = next(state.waypoints, name)
         if name then
-            return name, coordinate.x, coordinate.y, coordinate.z, coordinate.f
+            return name, private.toMC(coordinate.x, coordinate.y,
+                                      coordinate.z, coordinate.f)
         end
     end
 end
@@ -780,6 +799,18 @@ end
 -- reading right here, unless you're interested in implementation details.   --
 -------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
+
+-- Adjust constants depending on coordinate system.
+if useMinecraftCoordinates then
+    -- Constants.
+    for k, v in pairs(side) do
+        if type(v) == "number" then
+            side[k] = (v + 2) % 4
+        end
+    end
+    -- Reverse lookup.
+    side[0], side[1], side[2], side[3] = side[2], side[3], side[0], side[1]
+end
 
 -- Raise error when trying to access invalid key in the constant tables. This
 -- is meant to make it easier to track down typos.
@@ -1359,6 +1390,48 @@ function private.unwrapStartup(force)
 end
 
 -------------------------------------------------------------------------------
+-- Coordinate conversion                                                     --
+-------------------------------------------------------------------------------
+
+--[[
+    Converts a coordinate from the internal system to Minecraft's system.
+
+    This does nothing if useMinecraftCoordinates is false.
+
+    @param x the X coordinate.
+    @param y the Y coordinate.
+    @param z the Z coordinate.
+    @param facing the optional facing.
+    @private
+]]
+function private.toMC(x, y, z, facing)
+    if useMinecraftCoordinates then
+        return y, z, -x, facing and (facing + 2) % 4 or nil
+    else
+        return x, y, z, facing
+    end
+end
+
+--[[
+    Converts a coordinate from Minecraft's system to the internal system.
+
+    This does nothing if useMinecraftCoordinates is false.
+
+    @param x the X coordinate.
+    @param y the Y coordinate.
+    @param z the Z coordinate.
+    @param facing the optional facing.
+    @private
+]]
+function private.fromMC(x, y, z, facing)
+    if useMinecraftCoordinates then
+        return -z, x, y, facing and (facing + 2) % 4 or nil
+    else
+        return x, y, z, facing
+    end
+end
+
+-------------------------------------------------------------------------------
 -- Movement implementation                                                   --
 -------------------------------------------------------------------------------
 
@@ -1687,7 +1760,7 @@ function private.navigate()
     local result, reason
     repeat
         -- Figure out how far we have to move along each axis.
-        local x, y, z = get()
+        local x, y, z = private.fromMC(get())
         local step = state.path.steps[1]
         local dx, dy, dz = step.x - x, step.y - y, step.z - z
 
@@ -1701,6 +1774,9 @@ function private.navigate()
 
         -- Finally, adjust our facing.
         if result and step.f ~= nil then
+            if useMinecraftCoordinates then
+                step.f = (step.f + 2) % 4
+            end
             result = turn(step.f)
             if not result then
                 reason = reason.queue_full

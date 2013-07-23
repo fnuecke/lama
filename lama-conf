@@ -189,8 +189,7 @@ end
 ]]
 function private.display(x, y, z, f)
     if f ~= nil then
-        f = ({"North", "East", "South", "West"})[f + 1]
-        print(string.format("(%d, %d, %d, %s)", x, y, z, f))
+        print(string.format("(%d, %d, %d, %s)", x, y, z, lama.side[f]))
     else
         print(string.format("(%d, %d, %d)", x, y, z))
     end
