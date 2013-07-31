@@ -1150,6 +1150,10 @@ function private.load()
     for section, _ in pairs(stateFile) do
         -- If one of the state files is invalid we reset the complete state.
         if not load(section) then
+            -- Try to at least keep our waypoints.
+            if section ~= "waypoints" then
+                load("waypoints")
+            end
             private.reset()
             return
         end
@@ -1173,7 +1177,15 @@ function private.unserialize(filename)
     -- trust CC Lua's GC in this regard because I had to actually close
     -- MC once or twice because some files stayed locked even though I
     -- already returned to the menu.
-    return true, textutils.unserialize(data)
+
+    -- Custom implementation of textutils.unserialize() that properly handles
+    -- serialized math.huge values...
+    local result, reason = loadstring("return " .. data, filename)
+    if not result then
+        return true, data
+    else
+        return true, setfenv(result, {["inf"] = math.huge})()
+    end
 end
 
 --[[
@@ -1233,7 +1245,7 @@ function private.reset()
     state.position.y = 0
     state.position.z = 0
     state.position.f = 0
-    state.waypoints = {}
+    -- No state.waypoints = {}. Keep waypoints intact.
     state.move = nil
     state.path = nil
     state.wrap = 0
@@ -1726,12 +1738,12 @@ function private.move(direction, tries, aggressive)
                     -- It's a turtle. Just wait for a bit to allow it to move
                     -- out of the way.
                     os.sleep(2)
-                elseif dig and not dig() and tries == 1 then
+                elseif dig and not dig() then
                     -- Some block we can't dig, so there's nothing we can do.
                     private.endMove()
                     return false, reason.unbreakable_block
                 end
-            elseif aggressive and attack and not attack() and tries == 1 then
+            elseif aggressive and attack and not attack() then
                 -- Not a block but nothing we can/may attack. Abort.
                 private.endMove()
                 return false, reason.invulnerable_entity
