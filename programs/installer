@@ -12,26 +12,26 @@ local branch = "master"
 local files = {
 	{
 		name = "lama",
-		url = "https://github.com/fnuecke/lama/raw/"..branch.."/lama-min"
+		url = "https://github.com/fnuecke/lama/raw/"..branch.."/apis/lama-min"
 	},
 	{
 		name = "lama-conf",
 		info = "This is a utility application for managing the API's internal state from the shell.",
-		url = "https://github.com/fnuecke/lama/raw/"..branch.."/lama-conf",
+		url = "https://github.com/fnuecke/lama/raw/"..branch.."/programs/lama-conf",
 		ask = true,
 		default = true
 	},
 	{
 		name = "lama-example",
 		info = "This is an small example application, demonstrating how to write a resumable program using the API.",
-		url = "https://github.com/fnuecke/lama/raw/"..branch.."/lama-example",
+		url = "https://github.com/fnuecke/lama/raw/"..branch.."/programs/lama-example",
 		ask = true,
 		default = false
 	},
 	{
 		name = "lama-src",
 		info = "This is the full, non-minified version of the API. You only need this if you're interested in the implementation details.",
-		url = "https://github.com/fnuecke/lama/raw/"..branch.."/lama",
+		url = "https://github.com/fnuecke/lama/raw/"..branch.."/apis/lama",
 		ask = true,
 		default = false
 	}
