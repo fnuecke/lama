@@ -62,14 +62,15 @@ end
 
 -- Interactively download all files.
 for _, file in ipairs(files) do
-    if not (function()
+    (function()
         if file.ask then
             print("Do you wish to install '" .. file.name .. "'?")
             if file.info then
                 print("  " .. file.info)
             end
             if not prompt(file.default) then
-                return false
+                print("Skipping.")
+                return
             end
         end
         fs.makeDir(file.folder)
@@ -77,7 +78,8 @@ for _, file in ipairs(files) do
         if fs.exists(path) then
             print("Warning: file '" .. path .. "' already exists. Overwrite?")
             if not prompt(true) then
-                return false
+                print("Skipping.")
+                return
             end
         end
         print("Fetching '" .. file.name .. "'...")
@@ -93,17 +95,13 @@ for _, file in ipairs(files) do
                 print("Oh dear, something went wrong (bad HTTP response code " .. response .. ").")
                 print("Please try again later; sorry for the inconvenience!")
                 os.sleep(0.1)
-                return
             end
         else
             print("Oh dear, something went wrong (did not get a request handle).")
             print("Please try again later; sorry for the inconvenience!")
             os.sleep(0.1)
-            return
         end
-    end)() then
-        print("Skipping.")
-    end
+    end)()
     print()
 end
 
