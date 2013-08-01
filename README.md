@@ -190,6 +190,13 @@ Still, this is software, and testing is a tricky business, so it's very possible
 Changelog
 =========
 
+- Version 1.3
+  - Switched to lazy initialization. This means calling `os.loadAPI("lama")` will no longer block due to the API finishing pending moves. Instead, the first call to any function in the API will trigger initialization and may block. A new function, `lama.init()` has been added specifically for this, but any function will trigger the same logic before doing its own thing. You won't (shouldn't) really notice this unless you use the API in multiple coroutines.
+  - Fixed broken `math.huge` serialization, which means resuming moves using an infinite number of tries didn't work. This is actually `textutils.serialize/unserialize`'s fault, it writes `inf` and then reads that back as `nil`, because it's interpreted as a variable.
+  - Fixed waypoints being deleted if some other part of the state was invalid.
+  - Changed how indestructible blocks and invulnerable entities are handled. When one is encountered, the move will now fail immediately. This is because moves with an infinite number of tries would otherwise never return when hitting bedrock, for example.
+  - Changed / introduced folder structure. The API is now in an `apis` folder and the programs (`lama-conf`) in a `programs` folder. This breaks the old installer on pastebin, get the new one if you plan on using it, please. Sorry for the inconvenience.
+
 - Version 1.2
   - **Breaking Change:** Added a setting `useMinecraftCoordinates` and it defaults to `true`. *Set it back to `false` if you don't want to adjust your scripts*. I totally forgot to check what kind of coordinate system Minecraft uses internally (i.e. what you see when you enable the debug screen with F3). So now the script uses one that's different. If this setting is `true`, it will make all API functions return and accept coordinates of Minecraft's coordinate system.
   Internally the coordinate system used will always be the custom one, so you can upgrade and switch this setting on and off without breaking any state files.
