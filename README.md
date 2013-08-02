@@ -147,6 +147,8 @@ Note that waypoints *may* have a facing associated with them, but don't have to.
 Utility
 -------
 
+* `lama.init()`  
+    Can be used to ensure the API has been initialized without any side-effects. If this is the first call and the API has to be initialized because of that, this will block until any pending moves are completed.
 * `lama.startupResult() -> boolean, lama.reason`  
     Can be used in resumable programs to check whether a move command that was issued just before the turtle was forcibly shut down completed successfully or not. You will need this if you make decisions based on the result of the movement's success (e.g. stop the program if the turtle fails to move).
 * `lama.hijackTurtleAPI(restore)`  
@@ -191,11 +193,12 @@ Changelog
 =========
 
 - Version 1.3
-  - Switched to lazy initialization. This means calling `os.loadAPI("lama")` will no longer block due to the API finishing pending moves. Instead, the first call to any function in the API will trigger initialization and may block. A new function, `lama.init()` has been added specifically for this, but any function will trigger the same logic before doing its own thing. You won't (shouldn't) really notice this unless you use the API in multiple coroutines.
-  - Fixed broken `math.huge` serialization, which means resuming moves using an infinite number of tries didn't work. This is actually `textutils.serialize/unserialize`'s fault, it writes `inf` and then reads that back as `nil`, because it's interpreted as a variable.
+  - **Important:** Changed / introduced folder structure. The API is now in an `apis` folder and the programs (`lama-conf`) in a `programs` folder. This breaks the old installer on pastebin, get the new one if you plan on using it, please. You'll also have to either move the files or adjust your `os.loadAPI` paths. Sorry for the inconvenience.
+  - Switched to lazy initialization. This means calling `os.loadAPI("apis/lama")` will no longer block due to the API finishing pending moves. Instead, the first call to any function in the API will trigger initialization and may block. A new function, `lama.init()` has been added specifically for this, but any function will trigger the same logic before doing its own thing. The intention is to allow other startup programs to run before continuing interruped movement.
+  - Fixed broken `math.huge` serialization, which means resuming moves using an infinite number of tries didn't work. This was actually `textutils.serialize/unserialize`'s fault, it writes `inf` and then reads that back as `nil`, because it's interpreted as a variable.
   - Fixed waypoints being deleted if some other part of the state was invalid.
   - Changed how indestructible blocks and invulnerable entities are handled. When one is encountered, the move will now fail immediately. This is because moves with an infinite number of tries would otherwise never return when hitting bedrock, for example.
-  - Changed / introduced folder structure. The API is now in an `apis` folder and the programs (`lama-conf`) in a `programs` folder. This breaks the old installer on pastebin, get the new one if you plan on using it, please. Sorry for the inconvenience.
+  - Tested some more for robustness using my own [mining program][jam]. It even survived two game crashes, so I feel this can safely be called stable now.
 
 - Version 1.2
   - **Breaking Change:** Added a setting `useMinecraftCoordinates` and it defaults to `true`. *Set it back to `false` if you don't want to adjust your scripts*. I totally forgot to check what kind of coordinate system Minecraft uses internally (i.e. what you see when you enable the debug screen with F3). So now the script uses one that's different. If this setting is `true`, it will make all API functions return and accept coordinates of Minecraft's coordinate system.
@@ -227,6 +230,7 @@ This API is licensed under the [MIT License][license], which basically means you
 [event post]: http://www.computercraft.info/forums2/index.php?/topic/13855-events-across-world-reload/
 [forairan]: http://www.computercraft.info/forums2/index.php?/topic/3018-init-scripts-utility-to-allow-for-multiple-independent-startup-scripts/
 [forum post]: http://www.computercraft.info/forums2/index.php?/topic/13919-api-lama-location-aware-movement-api/
+[jam]: https://github.com/fnuecke/ccapis/blob/master/programs/jam
 [license]: http://opensource.org/licenses/mit-license.php
 [luamin]: https://github.com/mathiasbynens/luamin
 [startup]: https://github.com/fnuecke/ccapis
