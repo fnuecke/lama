@@ -186,6 +186,7 @@ I have tested the robustness of the API using the following method:
 - Have some bedrock in the cube.
 - Have a mob in the cube.
 - Quit the game over and over as well as resetting the turtle manually (Ctrl+R) to interrupt the program at different code locations, hopefully having hit each one at least once.
+- Run a big [JAM quarry][jam] (160x160 blocks) and quit+resume the game repeatedly.
 
 Still, this is software, and testing is a tricky business, so it's very possible for some interesting bugs to remain. If you come across any (and are sure it's not your fault) please let me know, thanks!
 
