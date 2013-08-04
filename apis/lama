@@ -973,6 +973,7 @@ private.schema["1.2"] = {
         },
         upgrade = function(value)
             state.fuel = value.preMoveFuel
+            private.save("fuel")
             return {value.direction, value.tries, value.aggressive}
         end
     }
