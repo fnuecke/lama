@@ -54,6 +54,7 @@ local apiPath = "apis/lama"
 local stateFile = {
     position  = "/.lama-state",
     waypoints = "/.lama-waypoints",
+    fuel      = "/.lama-fuel",
     move      = "/.lama-move-state",
     path      = "/.lama-path-state",
     wrap      = "/.lama-wrap-state"
@@ -63,6 +64,13 @@ local stateFile = {
 -- to not lose changes. This deletes state files if they fail validation, so
 -- that we don't try to re-parse them over and over again.
 local deleteInvalidStateFiles = true
+
+-- The file used to mark the API state as invalid. If this file exists we will
+-- not allow any interaction besides lama.set(), but always throw an error
+-- instead. This is to ensure that turtles don't do weird things after the
+-- position cannot be guaranteed to be correct anymore (e.g. due to hard server
+-- crashes resulting in a rollback).
+local invalidStateFile = "/.lama-invalid"
 
 -- If this computer uses a multi-startup script (e.g. Forairan's or mine) this
 -- determins the 'priority' with which the API is initialized after a reboot.
@@ -108,7 +116,7 @@ local state, private
 -------------------------------------------------------------------------------
 
 -- The current version of the API.
-version = "1.3"
+version = "1.4"
 
 -- Constants for a turtle's facing, used for turn() and get()/set(). Note that
 -- these are adjusted in the initialization of the API if the setting
@@ -247,7 +255,7 @@ end
     @return the new position and facing of the turtle (like lama.get()).
 ]]
 function set(x, y, z, facing)
-    private.resume()
+    private.resume(true)
     if state.move or state.path then
         error("cannot set position while moving")
     end
@@ -268,6 +276,7 @@ function set(x, y, z, facing)
     position.z = z
     position.f = facing
     private.save("position")
+    private.revalidate()
     return get()
 end
 
@@ -863,6 +872,10 @@ state = {
     -- List of registered waypoints.
     waypoints = {},
 
+    -- The last known fuel state. This is used to ensure our coordinates are
+    -- still valid (might be broken due to invalid API use or server rollback).
+    fuel = turtle.getFuelLevel(),
+
     -- The current movement state, i.e. the direction we're moving in, the fuel
     -- level before the move started, the remaining tries and whether we're
     -- moving aggressively or not.
@@ -907,6 +920,7 @@ private.schema[version] = {
             }
         }
     },
+    fuel = {type = "number", value = private.isInteger},
     move = {
         type = "table",
         optional = true,
@@ -915,7 +929,6 @@ private.schema[version] = {
                 type = "number",
                 value = function(v) return private.direction[v] ~= nil end
             },
-            preMoveFuel = {type = "number", value = private.isInteger},
             tries = {type = "number", value = private.isInteger},
             aggressive = {type = "boolean"}
         }
@@ -942,6 +955,27 @@ private.schema[version] = {
         }
     },
     wrap = {type = "number", value = private.isInteger}
+}
+
+-- Schema delta for version 1.2 to 1.3 state files (used for upgrading).
+private.schema["1.2"] = {
+    move = {
+        type = "table",
+        optional = true,
+        properties = {
+            direction = {
+                type = "number",
+                value = function(v) return private.direction[v] ~= nil end
+            },
+            preMoveFuel = {type = "number", value = private.isInteger},
+            tries = {type = "number", value = private.isInteger},
+            aggressive = {type = "boolean"}
+        },
+        upgrade = function(value)
+            state.fuel = value.preMoveFuel
+            return {value.direction, value.tries, value.aggressive}
+        end
+    }
 }
 
 -- Schema for version 1.0 state files (used for upgrading).
@@ -1133,6 +1167,12 @@ function private.load()
                 -- All green, keep the new state.
                 state[section] = result
                 return true
+            elseif private.schema["1.2"][section] and
+                   private.validate(result, private.schema["1.2"][section])
+            then
+                -- We can upgrade this section. Let's.
+                state[section] = private.schema["1.2"][section].upgrade(result)
+                return true
             else
                 if deleteInvalidStateFiles then
                     print("LAMA: Invalid file '" .. filename ..
@@ -1212,9 +1252,9 @@ function private.upgrade()
     -- format and return.
     state.position = result.position
     if type(result.moving) == "string" then
+        state.fuel = result.preMoveFuel
         state.move = {
             direction = private.direction[result.moving],
-            preMoveFuel = result.preMoveFuel,
             tries = result.tries,
             aggressive = result.aggressive
         }
@@ -1227,6 +1267,7 @@ function private.upgrade()
     -- Write back the new format.
     private.save("position")
     private.save("move")
+    private.save("fuel")
     private.save("wrap")
 
     return true
@@ -1246,6 +1287,7 @@ function private.reset()
     state.position.z = 0
     state.position.f = 0
     -- No state.waypoints = {}. Keep waypoints intact.
+    state.fuel = turtle.getFuelLevel()
     state.move = nil
     state.path = nil
     state.wrap = 0
@@ -1254,10 +1296,38 @@ function private.reset()
     if deleteInvalidStateFiles then
         fs.delete(stateFile.position)
         -- No fs.delete(stateFile.waypoints). Keep the waypoints intact.
+        fs.delete(stateFile.fuel)
         fs.delete(stateFile.move)
         fs.delete(stateFile.path)
         fs.delete(stateFile.wrap)
     end
+end
+
+--[[
+    Creates the file we use to check if we're currently in an invalid state.
+
+    @private
+]]
+function private.invalidate()
+    fs.open(invalidStateFile, "w").close()
+end
+
+--[[
+    Deletes the file we use to check if we're currently in an invalid state.
+
+    @private
+]]
+function private.revalidate()
+    fs.delete(invalidStateFile)
+end
+
+--[[
+    Checks whether we're currently in an invalid state.
+
+    @return true if the state is invalid; false otherwise.
+]]
+function private.isInvalid()
+    return fs.exists(invalidStateFile)
 end
 
 -------------------------------------------------------------------------------
@@ -1425,11 +1495,21 @@ end
     any function of the API will trigger this logic. An alternative "no-op"
     function to get() (which isn't very clear when reading) is the init()
     function, which should make the purpose of the call clear.
+
+    @param dontCrash don't throw an error if the API is in an invalid state.
+    @private
 ]]
-function private.resume()
-    -- Only initialize once.
+function private.resume(dontCrash)
+    -- Only initialize once, if successful.
     if state.isInitialized then
         return
+    end
+    if private.isInvalid() then
+        if dontCrash then
+            return
+        end
+        error("invalid state. reinitialize position, then delete '" ..
+              invalidStateFile .. "'.")
     end
     state.isInitialized = true
 
@@ -1446,6 +1526,24 @@ function private.resume()
     -- Force unwrapping if we have at least one level of startup wrapper.
     private.unwrapStartup(true)
 
+    -- Verify out state integrity using the fuel level. Note that this can fail
+    -- exacly if we were moving when we last saved and the server rolled back
+    -- by exactly one move, in which case we'll think we moved even though we
+    -- didn't. That's *really* unlikely though. If there's a server rollback
+    -- it's usually by a lot more than that...
+    if not state.move and turtle.getFuelLevel() ~= state.fuel or
+       (turtle.getFuelLevel() ~= state.fuel and
+        turtle.getFuelLevel() ~= state.fuel - 1)
+    then
+        -- This should not be possible if the API is used correctly, i.e. the
+        -- turtle is not refueled while moving (via a coroutine) and no other
+        -- movement functions of the turtle are used. Another possibility why
+        -- this can happen is a hard server crash (rollback).
+        private.reset()
+        private.invalidate()
+        error("unexpected fuel state")
+    end
+
     -- Check if we performed a single move and finish any pending multi-try
     -- single moves.
     if state.move then
@@ -1453,7 +1551,7 @@ function private.resume()
         -- the turtle was shut down (server quit or chunk unload) then we
         -- expect to have exactly one fuel less than before, since only
         -- successful moves use up (exactly one) fuel.
-        if turtle.getFuelLevel() == state.move.preMoveFuel then
+        if turtle.getFuelLevel() == state.fuel then
             -- No fuel was used, so we didn't move. This can only fail if we
             -- refuel directly after moving, which cannot happen unless its
             -- pretty much forced using coroutines... so yeah, this will do.
@@ -1478,19 +1576,14 @@ function private.resume()
                 -- in that phase.
                 private.endMove()
             end
-        elseif turtle.getFuelLevel() == state.move.preMoveFuel - 1 then
+        elseif turtle.getFuelLevel() == state.fuel - 1 then
             -- We used one fuel so we made our move! As with the case above,
             -- this can only be wrong if refueling is involved somewhere,
             -- which, again, can only happen using coroutines.
             private.updateState()
             private.endMove()
-        else
-            -- This should not be possible if the API is used correctly, i.e.
-            -- it is not called from multiple coroutines and no other movement
-            -- functions of the turtle are used.
-            private.reset()
-            error("Unexpected fuel state after reboot; invalid API use?")
         end
+        -- Other cases handled above!
     end
 
     -- If we're currently traveling towards a target location, continue doing
@@ -1691,7 +1784,6 @@ function private.move(direction, tries, aggressive)
         -- level before the command to allow testing for a successful move in
         -- case we are interrupted by a server quit / chunk unload while
         -- waiting for the move to finish.
-        local preMoveFuel = turtle.getFuelLevel()
         local moveId = move()
         if moveId < 0 then
             -- Too many events queued already.
@@ -1700,7 +1792,6 @@ function private.move(direction, tries, aggressive)
         end
         state.move = {
             direction = direction,
-            preMoveFuel = preMoveFuel,
             tries = tries,
             aggressive = aggressive
         }
@@ -1813,6 +1904,10 @@ function private.updateState()
 
     -- Save new state.
     private.save("position")
+
+    -- Also update our fuel level.
+    state.fuel = turtle.getFuelLevel()
+    private.save("fuel")
 end
 
 --[[
