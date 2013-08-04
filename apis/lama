@@ -257,7 +257,7 @@ end
 function set(x, y, z, facing)
     private.resume(true)
     if state.move or state.path then
-        error("cannot set position while moving")
+        error("Cannot set position while moving", 0)
     end
 
     -- Type checks.
@@ -461,7 +461,7 @@ function navigate(path, tries, aggressive)
             -- Add the coordinate to the list.
             table.insert(absPath, {x = x, y = y, z = z, f = f})
         else
-            error("invalid path entry at index " .. k)
+            error("Invalid path entry at index " .. k, 0)
         end
     end
 
@@ -841,10 +841,10 @@ do
         setmetatable(table, {
             __index = function(t,k)
                 error("Trying to access invalid '" .. name ..
-                      "' constant '" .. k .. "'.")
+                      "' constant '" .. k .. "'.", 0)
             end,
             __newindex = function()
-                error("Trying to modify readonly table.")
+                error("Trying to modify readonly table.", 0)
                 -- Yes, existing entries can be overwritten like this, but I
                 -- prefer to keep the table enumerable via pairs(). And this is
                 -- just a utility "feature" anyway.
@@ -1509,16 +1509,17 @@ function private.resume(dontCrash)
         if dontCrash then
             return
         end
-        error("invalid state. reinitialize position, then delete '" ..
-              invalidStateFile .. "'.")
+        error("Invalid state. Please reinitialize the turtle's position.", 0)
     end
     state.isInitialized = true
 
     -- Initialize startup script management.
     private.initStartup()
 
-    -- Load state, if any.
+    -- Load state, if any, make sure we have a saved fuel level (so we don't
+    -- have to re-save it each time we initiate a move).
     private.load()
+    private.save("fuel")
 
     -- Finish any active moves. Make sure any active movement can complete.
     os.sleep(0.1) -- Wait a bit so that at least one event queue slot is free.
@@ -1527,11 +1528,7 @@ function private.resume(dontCrash)
     -- Force unwrapping if we have at least one level of startup wrapper.
     private.unwrapStartup(true)
 
-    -- Verify out state integrity using the fuel level. Note that this can fail
-    -- exacly if we were moving when we last saved and the server rolled back
-    -- by exactly one move, in which case we'll think we moved even though we
-    -- didn't. That's *really* unlikely though. If there's a server rollback
-    -- it's usually by a lot more than that...
+    -- Verify out state integrity using the fuel level.
     if not state.move and turtle.getFuelLevel() ~= state.fuel or
        (turtle.getFuelLevel() ~= state.fuel and
         turtle.getFuelLevel() ~= state.fuel - 1)
@@ -1542,7 +1539,7 @@ function private.resume(dontCrash)
         -- this can happen is a hard server crash (rollback).
         private.reset()
         private.invalidate()
-        error("unexpected fuel state")
+        error("Unexpected fuel state.", 0)
     end
 
     -- Check if we performed a single move and finish any pending multi-try
@@ -1985,9 +1982,16 @@ function private.navigate()
         local step = state.path.steps[1]
         local dx, dy, dz = step.x - x, step.y - y, step.z - z
 
-        -- Then move that distance along each axis.
-        for axis, distance in pairs({x = dx, y = dy, z = dz}) do
-            result, reason = travel(axis, distance)
+        -- Then move that distance along each axis. Move the shorter distances
+        -- first.
+        local axes = {{axis = "x", distance = dx},
+                      {axis = "y", distance = dy},
+                      {axis = "z", distance = dz}}
+        table.sort(axes, function(a, b)
+                             return a.distance > b.distance
+                         end)
+        for _, entry in ipairs(axes) do
+            result, reason = travel(entry.axis, entry.distance)
             if not result then
                 break
             end
