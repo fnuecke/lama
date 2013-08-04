@@ -1988,7 +1988,7 @@ function private.navigate()
                       {axis = "y", distance = dy},
                       {axis = "z", distance = dz}}
         table.sort(axes, function(a, b)
-                             return a.distance > b.distance
+                             return math.abs(a.distance) < math.abs(b.distance)
                          end)
         for _, entry in ipairs(axes) do
             result, reason = travel(entry.axis, entry.distance)
