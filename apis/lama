@@ -385,11 +385,17 @@ end
         as many times (e.g. to get through stacks of sand or gravel).
     @param aggressive if set to true, will also try to attack to clear its way
         when obstructed.
+    @param longestFirst whether to move along the longer axes first. This an be
+        used to control how the turtle moves along its path. For example, when
+        moving from (0, 0, 0) to (1, 0, 3), when this is true the turtle will
+        move along the Z-axis first, then along the X-axis, if it is false the
+        other way around.
     @return true if the turtle moved successfully, (false, reason) if it failed
         and stopped somewhere along the way.
 ]]
-function moveto(x, y, z, facing, tries, aggressive)
-    return navigate({{x = x, y = y, z = z, facing = facing}}, tries, aggressive)
+function moveto(x, y, z, facing, tries, aggressive, longestFirst)
+    return navigate({{x = x, y = y, z = z, facing = facing}},
+                    tries, aggressive, longestFirst)
 end
 
 -- Alias for moveto, usable as long as it's not a keyword, so why not.
@@ -420,17 +426,24 @@ getfenv()["goto"] = moveto
         as many times (e.g. to get through stacks of sand or gravel).
     @param aggressive if set to true, will also try to attack to clear its way
         when obstructed.
+    @param longestFirst whether to move along the longer axes first. This an be
+        used to control how the turtle moves along its path. For example, when
+        moving from (0, 0, 0) to (1, 0, 3), when this is true the turtle will
+        move along the Z-axis first, then along the X-axis, if it is false the
+        other way around.
     @return true if the turtle moved successfully, (false, reason) if it failed
         and stopped somewhere along the way.
     @throw if the path contains an unknown waypoint or an invalid entry.
 ]]
-function navigate(path, tries, aggressive)
+function navigate(path, tries, aggressive, longestFirst)
     -- Type checks.
     assert(type(path) == "table", "'path' must be a table")
     assert(tries == nil or private.isInteger(tries),
         "'tries' must be an integral number or omitted")
     assert(aggressive == nil or type(aggressive) == "boolean",
         "'aggressive' must be a boolean or omitted")
+    assert(longestFirst == nil or type(longestFirst) == "boolean",
+        "'longestFirst' must be a boolean or omitted")
 
     -- Thread safety.
     private.resume()
@@ -483,7 +496,8 @@ function navigate(path, tries, aggressive)
     state.path = {
         steps = absPath,
         tries = tries or 0,
-        aggressive = aggressive or false
+        aggressive = aggressive or nil,
+        longestFirst = longestFirst or nil
     }
     private.save("path")
     return private.navigate()
@@ -733,13 +747,18 @@ end
         as many times (e.g. to get through stacks of sand or gravel).
     @param aggressive if set to true, will also try to attack to clear its way
         when obstructed.
+    @param longestFirst whether to move along the longer axes first. This an be
+        used to control how the turtle moves along its path. For example, when
+        moving from (0, 0, 0) to (1, 0, 3), when this is true the turtle will
+        move along the Z-axis first, then along the X-axis, if it is false the
+        other way around.
     @return true if the turtle moved successfully, (false, reason) if it failed
         and stopped somewhere along the way.
     @throw if there is no waypoint with the specified name.
 ]]
-function waypoint.moveto(name, tries, aggressive)
+function waypoint.moveto(name, tries, aggressive, longestFirst)
     x, y, z, facing = waypoint.get(name)
-    return moveto(x, y, z, facing, tries, aggressive)
+    return moveto(x, y, z, facing, tries, aggressive, longestFirst)
 end
 
 -- Alias for waypoint.moveto, usable as long as it's not a keyword, so why not.
@@ -953,7 +972,6 @@ private.schema[version] = {
     },
     move = {
         type = "table",
-        optional = true,
         properties = {
             direction = {
                 type = "number",
@@ -965,7 +983,6 @@ private.schema[version] = {
     },
     path = {
         type = "table",
-        optional = true,
         properties = {
             steps = {
                 type = "table",
@@ -981,7 +998,8 @@ private.schema[version] = {
                 }
             },
             tries = {type = "number", value = private.isInteger},
-            aggressive = {type = "boolean"}
+            aggressive = {type = "boolean", optional = true},
+            longestFirst = {type = "boolean", optional = true}
         }
     },
     wrap = {type = "number", value = private.isInteger}
@@ -1573,14 +1591,7 @@ function private.resume(dontCrash)
     end
 
     -- If any validity check failed lock down the API.
-    if valid then
-        -- We can assume we're still in a valid state, so update our fuel. This
-        -- is used to avoid having to save the fuel state again before each
-        -- attempt to move and to finalize refuel operations.
-        state.fuel.current = turtle.getFuelLevel()
-        state.fuel.id = nil
-        private.save("fuel")
-    else
+    if not valid then
         -- This should not be possible if the API is used correctly, i.e. no
         -- other movement functions of the turtle are used. Another possibility
         -- why this can happen is a hard server crash (rollback).
@@ -1629,6 +1640,13 @@ function private.resume(dontCrash)
             -- Other cases handled in validation above!
             assert(false)
         end
+    else
+        -- We can assume we're in a valid non-moving state, so update our fuel.
+        -- This is used to avoid having to save the fuel state again before
+        -- each attempt to move and to finalize refuel operations.
+        state.fuel.current = turtle.getFuelLevel()
+        state.fuel.id = nil
+        private.save("fuel")
     end
 
     -- If we're currently traveling towards a target location, continue doing
@@ -1638,7 +1656,8 @@ function private.resume(dontCrash)
         -- necessary, because we could just try to continue moving, which would
         -- then result in the same failure, again. But we can avoid repeating
         -- work, so let's do it like this.
-        local result, _ = startupResult()
+        local result, _ = not private.startupResult or
+                          private.startupResult.result
         if result then
             -- Everything is still OK, continue moving.
             private.navigate()
@@ -1810,14 +1829,17 @@ end
 function private.turn(towards)
     -- Turn towards the target facing.
     local ids, position = {}, state.position
-    while getFacing() ~= towards do
+    if useMinecraftCoordinates then
+        towards = (towards + 2) % 4
+    end
+    while position.f ~= towards do
         -- We do not use the turnLeft() and turnRight() functions, because we
         -- want full control: we push all native events in one go and then wait
         -- for all of them to finish. This way we can stick to the pattern of
         -- immediately returning (non-yielding) if the turn fails due to a full
         -- event queue.
         local id
-        if towards == (getFacing() + 1) % 4 then
+        if towards == (position.f + 1) % 4 then
             -- Special case for turning clockwise, to avoid turning three times
             -- when once is enough, in particular for the left -> forward case,
             -- where we wrap around (from 3 -> 0).
@@ -2101,9 +2123,20 @@ function private.navigate()
 
     -- Process all remaining waypoints.
     local result, failureReason
-    repeat
+    local comparator
+    if state.path.longestFirst then
+        comparator = function(a, b)
+                         return math.abs(a.distance) > math.abs(b.distance)
+                     end
+    else
+        comparator = function(a, b)
+                         return math.abs(a.distance) < math.abs(b.distance)
+                     end
+    end
+    repeat 
         -- Figure out how far we have to move along each axis.
-        local x, y, z = private.fromMC(get())
+        local position = state.position
+        local x, y, z = position.x, position.y, position.z, position.f
         local step = state.path.steps[1]
         local dx, dy, dz = step.x - x, step.y - y, step.z - z
 
@@ -2112,9 +2145,7 @@ function private.navigate()
         local axes = {{axis = "x", distance = dx},
                       {axis = "y", distance = dy},
                       {axis = "z", distance = dz}}
-        table.sort(axes, function(a, b)
-                             return math.abs(a.distance) < math.abs(b.distance)
-                         end)
+        table.sort(axes, comparator)
         for _, entry in ipairs(axes) do
             result, failureReason = travel(entry.axis, entry.distance)
             if not result then
