@@ -586,9 +586,9 @@ function refuel(count)
     -- We have to split it like this because otherwise count being nil is still
     -- counted as an argument, leading to an "Expected a number" error.
     if count then
-        turtle.native.refuel(count)
+        id = turtle.native.refuel(count)
     else
-        turtle.native.refuel()
+        id = turtle.native.refuel()
     end
     if id == -1 then
         return false, reason.queue_full
@@ -1581,7 +1581,11 @@ function private.resume(dontCrash)
         -- If the ID we just got from our detect() call was larger than the one
         -- we got when refueling we're OK. If it wasn't we can be sure there
         -- was a rollback, in which case we can't say where we are anymore.
-        valid = valid and id > state.fuel.id
+        if id > state.fuel.id then
+            state.fuel.current = turtle.getFuelLevel()
+        else
+            valid = false
+        end
     elseif state.move then
         -- If we're moving it must match the stored one or be one less.
         valid = valid and turtle.getFuelLevel() == state.fuel.current or
