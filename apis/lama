@@ -60,11 +60,6 @@ local stateFile = {
     wrap      = "/.lama-wrap-state"
 }
 
--- If you meddle with the state files by hand you may want to set this to false
--- to not lose changes. This deletes state files if they fail validation, so
--- that we don't try to re-parse them over and over again.
-local deleteInvalidStateFiles = true
-
 -- The file used to mark the API state as invalid. If this file exists we will
 -- not allow any interaction besides lama.set(), but always throw an error
 -- instead. This is to ensure that turtles don't do weird things after the
@@ -255,17 +250,21 @@ end
     @return the new position and facing of the turtle (like lama.get()).
 ]]
 function set(x, y, z, facing)
-    private.resume(true)
-    if state.move or state.path then
-        error("Cannot set position while moving", 0)
-    end
-
     -- Type checks.
     assert(private.isInteger(x), "'x' must be an integral number")
     assert(private.isInteger(y), "'y' must be an integral number")
     assert(private.isInteger(z), "'z' must be an integral number")
     assert(private.isFacing(facing),
         "'facing' must be one of the lama.side constants")
+
+    -- Thread safety.
+    private.resume(true)
+    if private.isLocked() then
+        error("Cannot set position while moving or refueling.")
+    end
+
+    -- Reset the complete state before applying our new position.
+    private.reset()
 
     -- Convert coordinates.
     x, y, z, facing = private.fromMC(x, y, z, facing)
@@ -276,7 +275,6 @@ function set(x, y, z, facing)
     position.z = z
     position.f = facing
     private.save("position")
-    private.revalidate()
     return get()
 end
 
@@ -296,10 +294,11 @@ end
         and is still in the same position.
 ]]
 function forward(tries, aggressive)
-    if state.move then
+    private.resume()
+    if private.isLocked() then
         return false, reason.coroutine
     end
-    return private.move(private.direction.forward, tries, aggressive)
+    return private.forward(tries, aggressive)
 end
 
 --[[
@@ -317,10 +316,11 @@ end
         and is still in the same position.
 ]]
 function back(tries)
-    if state.move then
+    private.resume()
+    if private.isLocked() then
         return false, reason.coroutine
     end
-    return private.move(private.direction.back, tries)
+    return private.back(tries)
 end
 
 --[[
@@ -335,10 +335,11 @@ end
         and is still in the same position.
 ]]
 function up(tries, aggressive)
-    if state.move then
+    private.resume()
+    if private.isLocked() then
         return false, reason.coroutine
     end
-    return private.move(private.direction.up, tries, aggressive)
+    return private.up(tries, aggressive)
 end
 
 --[[
@@ -353,10 +354,11 @@ end
         and is still in the same position.
 ]]
 function down(tries, aggressive)
-    if state.move then
+    private.resume()
+    if private.isLocked() then
         return false, reason.coroutine
     end
-    return private.move(private.direction.down, tries, aggressive)
+    return private.down(tries, aggressive)
 end
 
 --[[
@@ -423,17 +425,18 @@ getfenv()["goto"] = moveto
     @throw if the path contains an unknown waypoint or an invalid entry.
 ]]
 function navigate(path, tries, aggressive)
-    private.resume()
-    if state.path then
-        return false, reason.coroutine
-    end
-
     -- Type checks.
     assert(type(path) == "table", "'path' must be a table")
     assert(tries == nil or private.isInteger(tries),
         "'tries' must be an integral number or omitted")
     assert(aggressive == nil or type(aggressive) == "boolean",
         "'aggressive' must be a boolean or omitted")
+
+    -- Thread safety.
+    private.resume()
+    if private.isLocked() then
+        return false, reason.coroutine
+    end
 
     -- Resolve path to be all absolute and validate coordinates.
     local absPath = {}
@@ -461,7 +464,7 @@ function navigate(path, tries, aggressive)
             -- Add the coordinate to the list.
             table.insert(absPath, {x = x, y = y, z = z, f = f})
         else
-            error("Invalid path entry at index " .. k, 0)
+            error("Invalid path entry at index " .. k)
         end
     end
 
@@ -529,43 +532,59 @@ end
     @see lama.side
 ]]
 function turn(towards)
-    private.resume()
-
     -- Type check, ensuring it's in bounds.
     assert(private.isFacing(towards),
         "'towards' must be one of the lama.side constants")
 
-    -- Turn towards the target facing.
-    local ids, position = {}, state.position
-    while getFacing() ~= towards do
-        -- We do not use the turnLeft() and turnRight() functions, because we
-        -- want full control: we push all native events in one go and then wait
-        -- for all of them to finish. This way we can stick to the pattern of
-        -- immediately returning (non-yielding) if the turn fails due to a full
-        -- event queue.
-        local id
-        if towards == (getFacing() + 1) % 4 then
-            -- Special case for turning clockwise, to avoid turning three times
-            -- when once is enough, in particular for the left -> forward case,
-            -- where we wrap around (from 3 -> 0).
-            id = turtle.native.turnRight()
-            if id >= 0 then
-                position.f = (position.f + 1) % 4
-            else
-                return false
-            end
-        else
-            id = turtle.native.turnLeft()
-            if id >= 0 then
-                position.f = (position.f - 1) % 4
-            else
-                return false
-            end
-        end
-        private.save("position")
-        table.insert(ids, id)
+    -- Thread safety.
+    private.resume()
+    if private.isLocked() then
+        return false, reason.coroutine
     end
-    return private.waitForResponse(ids)
+
+    return private.turn(towards)
+end
+
+---------------
+-- Refueling --
+---------------
+
+--[[
+    Uses the items in the currently select slot to refuel the turtle.
+
+    @param count the number of items to consume; complete stack if omitted.
+    @return true if the item was successfully consumed; false otherwise.
+]]
+function refuel(count)
+    -- Type check.
+    assert(count == nil or (private.isInteger(count) and
+                            count >= 0 and count <= 64),
+        "'count' must be a positive integral number in [0, 64] or omitted")
+
+    -- Thread safety.
+    private.resume()
+    if private.isLocked() then
+        return false, reason.coroutine
+    end
+
+    -- Issue the command, remember we're currently refueling and wait.
+    local id
+    -- We have to split it like this because otherwise count being nil is still
+    -- counted as an argument, leading to an "Expected a number" error.
+    if count then
+        turtle.native.refuel(count)
+    else
+        turtle.native.refuel()
+    end
+    if id == -1 then
+        return false, reason.queue_full
+    end
+    state.fuel.id = id
+    private.save("fuel")
+    local result = private.waitForResponse(id)
+    state.fuel.id = nil
+    private.save("fuel")
+    return result
 end
 
 ---------------
@@ -737,7 +756,7 @@ waypoint["goto"] = waypoint.moveto
     movement orders (including paths, so it can take a while for this function
     to return the first time it is called).
 
-    This function is idempodent.
+    This function is idempotent.
 ]]
 function init()
     private.resume()
@@ -795,6 +814,7 @@ function hijackTurtleAPI(restore)
         turtle.down      = turtle._lama.down
         turtle.turnRight = turtle._lama.turnRight
         turtle.turnLeft  = turtle._lama.turnLeft
+        turtle.refuel    = turtle._lama.refuel
         turtle._lama = nil
     else
         if turtle._lama then return end
@@ -804,14 +824,16 @@ function hijackTurtleAPI(restore)
             up        = turtle.up,
             down      = turtle.down,
             turnRight = turtle.turnRight,
-            turnLeft  = turtle.turnLeft
+            turnLeft  = turtle.turnLeft,
+            refuel    = turtle.refuel
         }
-        turtle.forward   = function() return forward() ~= false end
-        turtle.back      = function() return back()    ~= false end
-        turtle.up        = function() return up()      ~= false end
-        turtle.down      = function() return down()    ~= false end
-        turtle.turnRight = turnRight
-        turtle.turnLeft  = turnLeft
+        turtle.forward   = function() return select(1, forward()) end
+        turtle.back      = function() return select(1, back()) end
+        turtle.up        = function() return select(1, up()) end
+        turtle.down      = function() return select(1, down()) end
+        turtle.turnRight = function() return select(1, turnRight()) end
+        turtle.turnLeft  = function() return select(1, turnLeft()) end
+        turtle.refuel    = function() return select(1, refuel()) end
     end
 end
 
@@ -841,10 +863,10 @@ do
         setmetatable(table, {
             __index = function(t,k)
                 error("Trying to access invalid '" .. name ..
-                      "' constant '" .. k .. "'.", 0)
+                      "' constant '" .. k .. "'.")
             end,
             __newindex = function()
-                error("Trying to modify readonly table.", 0)
+                error("Trying to modify readonly table.")
                 -- Yes, existing entries can be overwritten like this, but I
                 -- prefer to keep the table enumerable via pairs(). And this is
                 -- just a utility "feature" anyway.
@@ -874,7 +896,8 @@ state = {
 
     -- The last known fuel state. This is used to ensure our coordinates are
     -- still valid (might be broken due to invalid API use or server rollback).
-    fuel = turtle.getFuelLevel(),
+    -- Also stores command ID when currently refueling (to detect rollback).
+    fuel = {current = turtle.getFuelLevel()},
 
     -- The current movement state, i.e. the direction we're moving in, the fuel
     -- level before the move started, the remaining tries and whether we're
@@ -920,7 +943,14 @@ private.schema[version] = {
             }
         }
     },
-    fuel = {type = "number", value = private.isInteger},
+    fuel = {
+        type = "table",
+        properties = {
+            current = {type = "number", value = private.isInteger},
+            id      = {type = "number", value = private.isInteger,
+                       optional = true}
+        }
+    },
     move = {
         type = "table",
         optional = true,
@@ -972,7 +1002,7 @@ private.schema["1.2"] = {
             aggressive = {type = "boolean"}
         },
         upgrade = function(value)
-            state.fuel = value.preMoveFuel
+            state.fuel.current = value.preMoveFuel
             private.save("fuel")
             return {value.direction, value.tries, value.aggressive}
         end
@@ -1135,6 +1165,10 @@ function private.save(what)
     -- Serialize before opening the file, just in case.
     local data = textutils.serialize(state[what])
     local file = fs.open(stateFile[what], "w")
+    if not file then
+        private.invalidate()
+        error("Could not opens state file '" .. what .. "' for writing.")
+    end
     file.write(data)
     file.close()
 end
@@ -1142,12 +1176,13 @@ end
 --[[
     Restores the complete state.
 
+    @return true if the state was restored successfully; false otherwise.
     @private
 ]]
 function private.load()
     -- Check if we may have upgraded and the state file is of an old version.
     if private.upgrade() then
-        return
+        return true
     end
 
     -- Utility function for loading single sections.
@@ -1162,7 +1197,7 @@ function private.load()
         local success, result = private.unserialize(filename)
         if success then
             -- Validate the read state.
-            local valid, reason = private.validate(result,
+            local valid, failureReason = private.validate(result,
                 private.schema[version][section])
             if valid then
                 -- All green, keep the new state.
@@ -1175,13 +1210,8 @@ function private.load()
                 state[section] = private.schema["1.2"][section].upgrade(result)
                 return true
             else
-                if deleteInvalidStateFiles then
-                    print("LAMA: Invalid file '" .. filename ..
-                        "' (" .. reason .. "), deleting and resetting.")
-                else
-                    print("LAMA: Invalid file '" .. filename ..
-                        "' (" .. reason .. "), resetting.")
-                end
+                print("LAMA: Invalid state file '" .. filename ..
+                    "' (" .. failureReason .. ").")
             end
         end
         return false
@@ -1189,16 +1219,13 @@ function private.load()
 
     -- Read all state sections one by one.
     for section, _ in pairs(stateFile) do
-        -- If one of the state files is invalid we reset the complete state.
         if not load(section) then
-            -- Try to at least keep our waypoints.
-            if section ~= "waypoints" then
-                load("waypoints")
-            end
-            private.reset()
-            return
+            return false
         end
     end
+
+    -- Everything is fine.
+    return true
 end
 
 --[[
@@ -1210,7 +1237,7 @@ end
 ]]
 function private.unserialize(filename)
     -- Read the text data from the file.
-    local file = fs.open(filename, "r")
+    local file = assert(fs.open(filename, "r"))
     local data = file.readAll()
     file.close()
 
@@ -1221,7 +1248,7 @@ function private.unserialize(filename)
 
     -- Custom implementation of textutils.unserialize() that properly handles
     -- serialized math.huge values...
-    local result, reason = loadstring("return " .. data, filename)
+    local result, _ = loadstring("return " .. data, filename)
     if not result then
         return true, data
     else
@@ -1247,13 +1274,11 @@ function private.upgrade()
         return false
     end
 
-    print("upgrading state file")
-
     -- It's a version 1.0 format state file. Convert to current
     -- format and return.
     state.position = result.position
     if type(result.moving) == "string" then
-        state.fuel = result.preMoveFuel
+        state.fuel.current = result.preMoveFuel
         state.move = {
             direction = private.direction[result.moving],
             tries = result.tries,
@@ -1288,52 +1313,41 @@ function private.reset()
     state.position.z = 0
     state.position.f = 0
     -- No state.waypoints = {}. Keep waypoints intact.
-    state.fuel = turtle.getFuelLevel()
+    state.fuel = {current = turtle.getFuelLevel()}
     state.move = nil
     state.path = nil
     state.wrap = 0
+    state.isInitializing = nil
     state.isInitialized = true
 
-    if deleteInvalidStateFiles then
-        fs.delete(stateFile.position)
-        -- No fs.delete(stateFile.waypoints). Keep the waypoints intact.
-        fs.delete(stateFile.fuel)
-        fs.delete(stateFile.move)
-        fs.delete(stateFile.path)
-        fs.delete(stateFile.wrap)
-    end
-end
+    fs.delete(stateFile.position)
+    -- No fs.delete(stateFile.waypoints). Keep the waypoints intact.
+    fs.delete(stateFile.fuel)
+    fs.delete(stateFile.move)
+    fs.delete(stateFile.path)
+    fs.delete(stateFile.wrap)
 
---[[
-    Creates the file we use to check if we're currently in an invalid state.
-
-    @private
-]]
-function private.invalidate()
-    fs.open(invalidStateFile, "w").close()
-end
-
---[[
-    Deletes the file we use to check if we're currently in an invalid state.
-
-    @private
-]]
-function private.revalidate()
     fs.delete(invalidStateFile)
 end
 
 --[[
-    Checks whether we're currently in an invalid state.
+    Checks whether the API is currently locked (because we're moving e.g.).
 
-    @return true if the state is invalid; false otherwise.
+    @return true if we're locked; false otherwise.
 ]]
-function private.isInvalid()
-    return fs.exists(invalidStateFile)
+function private.isLocked()
+    return state.move or state.path or state.fuel.id
 end
 
 -------------------------------------------------------------------------------
 -- Resume command on startup stuff                                           --
 -------------------------------------------------------------------------------
+
+-- The script we use for automatically initializing the API after a reboot.
+local startupScript = string.format(
+[[assert(os.loadAPI(%q))
+lama.init()
+lama.hijackTurtleAPI()]], apiPath)
 
 -- List of 'handlers'. This makes it easy to add support for different startup
 -- script implementations (e.g. from different OSs or utility scripts).
@@ -1362,8 +1376,9 @@ local startupHandlers = {
                 fs.move("/startup", startupBackupFile)
             end
 
-            local f = fs.open("/startup", "w")
-            f.writeLine("assert(os.loadAPI('" .. apiPath .. "')) lama.init()")
+            local f = assert(fs.open("/startup", "w"),
+                             "Could not open startup script for writing.")
+            f.writeLine(startupScript)
             if haveStartup then
                 f.writeLine("shell.run('/startup')")
             else
@@ -1392,8 +1407,10 @@ local startupHandlers = {
             local priority = type(startupPriority) == "number" and
                              string.format("%2d") or
                              tostring(startupPriority)
-            local f = fs.open("/init-scripts/" .. priority .. "_lama", "w")
-            f.write("assert(os.loadAPI('" .. apiPath .. "')) lama.init()")
+            local path = "/init-scripts/" .. priority .. "_lama"
+            local f = assert(fs.open(path, "w"),
+                             "Could not open startup script for writing.")
+            f.write(startupScript)
             f.close()
         end,
         test = function()
@@ -1411,8 +1428,7 @@ local startupHandlers = {
             -- Overwrite the startup file since the apiPath or the startup
             -- script's priority may have changed.
             startup.remove("lama")
-            startup.addString("lama", startupPriority,
-                "assert(os.loadAPI('" .. apiPath .. "')) lama.init()")
+            startup.addString("lama", startupPriority, startupScript)
         end,
         test = function()
             -- Check if the startup API is loaded.
@@ -1501,68 +1517,97 @@ end
     @private
 ]]
 function private.resume(dontCrash)
-    -- Only initialize once, if successful.
     if state.isInitialized then
+        -- Already initialized successfully, nothing to do here.
         return
     end
-    if private.isInvalid() then
+    while state.isInitializing do
+        -- Already being initialized by another thread, wait for it to finish.
+        os.sleep(1)
+    end
+    if fs.exists(invalidStateFile) then
+        -- API is in an invalid state, don't allow use of any functions.
         if dontCrash then
+            -- Except those that explicitly allow it, which is set() for now.
             return
         end
-        error("Invalid state. Please reinitialize the turtle's position.", 0)
+        error("Invalid state. Please reinitialize the turtle's position.")
     end
-    state.isInitialized = true
+
+    -- Thread safety: engaged!
+    state.isInitializing = true
 
     -- Initialize startup script management.
     private.initStartup()
 
-    -- Load state, if any, make sure we have a saved fuel level (so we don't
-    -- have to re-save it each time we initiate a move).
-    private.load()
-    private.save("fuel")
+    -- Load state, if any.
+    local valid = private.load()
 
-    -- Finish any active moves. Make sure any active movement can complete.
-    os.sleep(0.1) -- Wait a bit so that at least one event queue slot is free.
-    turtle.detect() -- Process event queue (blocks until processed).
+    -- Process event queue (blocks until processed) and get the ID which is
+    -- indicative of how long the turtle has lived (since command IDs grow
+    -- steadily over the lifetime of a computer). This is used for the validity
+    -- checks below.
+    local id
+    repeat
+        os.sleep(0.1)
+        id = turtle.native.detect()
+    until id ~= -1
+    private.waitForResponse(id)
 
     -- Force unwrapping if we have at least one level of startup wrapper.
     private.unwrapStartup(true)
 
-    -- Verify out state integrity using the fuel level.
-    if not state.move and turtle.getFuelLevel() ~= state.fuel or
-       (turtle.getFuelLevel() ~= state.fuel and
-        turtle.getFuelLevel() ~= state.fuel - 1)
-    then
-        -- This should not be possible if the API is used correctly, i.e. the
-        -- turtle is not refueled while moving (via a coroutine) and no other
-        -- movement functions of the turtle are used. Another possibility why
-        -- this can happen is a hard server crash (rollback).
-        private.reset()
-        private.invalidate()
-        error("Unexpected fuel state.", 0)
+    -- Ensure state validity using some tricks...
+    if state.fuel.id then
+        -- If the ID we just got from our detect() call was larger than the one
+        -- we got when refueling we're OK. If it wasn't we can be sure there
+        -- was a rollback, in which case we can't say where we are anymore.
+        valid = valid and id > state.fuel.id
+    elseif state.move then
+        -- If we're moving it must match the stored one or be one less.
+        valid = valid and turtle.getFuelLevel() == state.fuel.current or
+                          turtle.getFuelLevel() == state.fuel.current - 1
+    else
+        -- If we're not moving our fuel state must match the stored one.
+        valid = valid and turtle.getFuelLevel() == state.fuel.current
+    end
+
+    -- If any validity check failed lock down the API.
+    if valid then
+        -- We can assume we're still in a valid state, so update our fuel. This
+        -- is used to avoid having to save the fuel state again before each
+        -- attempt to move and to finalize refuel operations.
+        state.fuel.current = turtle.getFuelLevel()
+        state.fuel.id = nil
+        private.save("fuel")
+    else
+        -- This should not be possible if the API is used correctly, i.e. no
+        -- other movement functions of the turtle are used. Another possibility
+        -- why this can happen is a hard server crash (rollback).
+        state.isInitializing = nil
+        assert(fs.open(invalidStateFile, "w"),
+               "Failed to create invalidation file.").close()
+        error("Invalid state. Please reinitialize the turtle's position.")
     end
 
     -- Check if we performed a single move and finish any pending multi-try
     -- single moves.
     if state.move then
-        -- Here is the trick: if we did complete a move started directly before
-        -- the turtle was shut down (server quit or chunk unload) then we
-        -- expect to have exactly one fuel less than before, since only
-        -- successful moves use up (exactly one) fuel.
-        if turtle.getFuelLevel() == state.fuel then
-            -- No fuel was used, so we didn't move. This can only fail if we
-            -- refuel directly after moving, which cannot happen unless its
-            -- pretty much forced using coroutines... so yeah, this will do.
-
-            -- If we have some tries left, continue trying.
+        -- We can use that fuel state to check whether we moved successfully or
+        -- not: if we were moving, the fuel can only be equal to the previous
+        -- level, or one less. Equal meaning we didn't move, one less meaning
+        -- we did move.
+        if turtle.getFuelLevel() == state.fuel.current then
+            -- No fuel was used, so we didn't move. If we have some tries left,
+            -- continue trying.
             if state.move.tries > 0 then
-                local result, reason =
+                local result, failureReason =
                     private.move(state.move.direction,
                                  state.move.tries,
                                  state.move.aggressive)
                 private.startupResult = {
                     result = result,
-                    reason = reason
+                    reason = failureReason
                 }
             else
                 private.startupResult = {
@@ -1574,14 +1619,16 @@ function private.resume(dontCrash)
                 -- in that phase.
                 private.endMove()
             end
-        elseif turtle.getFuelLevel() == state.fuel - 1 then
+        elseif turtle.getFuelLevel() == state.fuel.current - 1 then
             -- We used one fuel so we made our move! As with the case above,
             -- this can only be wrong if refueling is involved somewhere,
             -- which, again, can only happen using coroutines.
             private.updateState()
             private.endMove()
+        else
+            -- Other cases handled in validation above!
+            assert(false)
         end
-        -- Other cases handled above!
     end
 
     -- If we're currently traveling towards a target location, continue doing
@@ -1591,7 +1638,7 @@ function private.resume(dontCrash)
         -- necessary, because we could just try to continue moving, which would
         -- then result in the same failure, again. But we can avoid repeating
         -- work, so let's do it like this.
-        local result, reason = startupResult()
+        local result, _ = startupResult()
         if result then
             -- Everything is still OK, continue moving.
             private.navigate()
@@ -1601,6 +1648,10 @@ function private.resume(dontCrash)
             private.endNavigate()
         end
     end
+
+    -- Done, don't run again, release thread lock!
+    state.isInitializing = nil
+    state.isInitialized = true
 end
 
 -------------------------------------------------------------------------------
@@ -1666,7 +1717,7 @@ function private.waitForResponse(ids)
     repeat
         local event, responseID, result = os.pullEvent("turtle_response")
         if event == "turtle_response" then
-            for i=1,#ids do
+            for i = 1, #ids do
                 if ids[i] == responseID then
                     success = success and result
                     table.remove(ids, i)
@@ -1716,6 +1767,79 @@ function private.tryGetReason(direction)
 end
 
 --[[
+    Internal forward() implementation, used to ignore lock while navigating.
+
+    @private
+]]
+function private.forward(tries, aggressive)
+    return private.move(private.direction.forward, tries, aggressive)
+end
+
+--[[
+    Internal back() implementation, used to ignore lock while navigating.
+
+    @private
+]]
+function private.back(tries)
+    return private.move(private.direction.back, tries)
+end
+
+--[[
+    Internal up() implementation, used to ignore lock while navigating.
+
+    @private
+]]
+function private.up(tries, aggressive)
+    return private.move(private.direction.up, tries, aggressive)
+end
+
+--[[
+    Internal down() implementation, used to ignore lock while navigating.
+
+    @private
+]]
+function private.down(tries, aggressive)
+    return private.move(private.direction.down, tries, aggressive)
+end
+
+--[[
+    Internal turn() implementation, used to ignore lock while navigating.
+
+    @private
+]]
+function private.turn(towards)
+    -- Turn towards the target facing.
+    local ids, position = {}, state.position
+    while getFacing() ~= towards do
+        -- We do not use the turnLeft() and turnRight() functions, because we
+        -- want full control: we push all native events in one go and then wait
+        -- for all of them to finish. This way we can stick to the pattern of
+        -- immediately returning (non-yielding) if the turn fails due to a full
+        -- event queue.
+        local id
+        if towards == (getFacing() + 1) % 4 then
+            -- Special case for turning clockwise, to avoid turning three times
+            -- when once is enough, in particular for the left -> forward case,
+            -- where we wrap around (from 3 -> 0).
+            id = turtle.native.turnRight()
+            if id == -1 then
+                return false, reason.queue_full
+            end
+            position.f = (position.f + 1) % 4
+        else
+            id = turtle.native.turnLeft()
+            if id == -1 then
+                return false, reason.queue_full
+            end
+            position.f = (position.f - 1) % 4
+        end
+        private.save("position")
+        table.insert(ids, id)
+    end
+    return private.waitForResponse(ids)
+end
+
+--[[
     Tries to move the turtle in the specified direction.
 
     If it doesn't work. checks whether we should try harder: if a number of
@@ -1735,8 +1859,6 @@ end
     @private
 ]]
 function private.move(direction, tries, aggressive)
-    private.resume()
-
     -- Type checks.
     assert(tries == nil or type(tries) == "number",
         "'tries' must be a number or omitted")
@@ -1783,7 +1905,7 @@ function private.move(direction, tries, aggressive)
         -- case we are interrupted by a server quit / chunk unload while
         -- waiting for the move to finish.
         local moveId = move()
-        if moveId < 0 then
+        if moveId == -1 then
             -- Too many events queued already.
             private.endMove()
             return false, reason.queue_full
@@ -1904,7 +2026,7 @@ function private.updateState()
     private.save("position")
 
     -- Also update our fuel level.
-    state.fuel = turtle.getFuelLevel()
+    state.fuel.current = turtle.getFuelLevel()
     private.save("fuel")
 end
 
@@ -1948,20 +2070,23 @@ function private.navigate()
             y = {side.east, side.west}})[axis]
         if directions then
             local direction = distance > 0 and directions[1] or directions[2]
-            turn(direction)
+            local result, failureReason = private.turn(direction)
+            if not result then
+                return result, failureReason
+            end
         end
 
         -- Move in the appropriate direction as often as necessary.
         local action = ({
-            x = forward,
-            y = forward,
-            z = distance > 0 and up or down})[axis]
+            x = private.forward,
+            y = private.forward,
+            z = distance > 0 and private.up or private.down})[axis]
         distance = math.abs(distance)
         local tries, aggressive = state.path.tries, state.path.aggressive
         while distance > 0 do
-            local result, reason = action(tries, aggressive)
+            local result, failureReason = action(tries, aggressive)
             if not result then
-                return result, reason
+                return result, failureReason
             end
             distance = distance - 1
         end
@@ -1975,7 +2100,7 @@ function private.navigate()
     private.wrapStartup()
 
     -- Process all remaining waypoints.
-    local result, reason
+    local result, failureReason
     repeat
         -- Figure out how far we have to move along each axis.
         local x, y, z = private.fromMC(get())
@@ -1991,7 +2116,7 @@ function private.navigate()
                              return math.abs(a.distance) < math.abs(b.distance)
                          end)
         for _, entry in ipairs(axes) do
-            result, reason = travel(entry.axis, entry.distance)
+            result, failureReason = travel(entry.axis, entry.distance)
             if not result then
                 break
             end
@@ -2002,10 +2127,7 @@ function private.navigate()
             if useMinecraftCoordinates then
                 step.f = (step.f + 2) % 4
             end
-            result = turn(step.f)
-            if not result then
-                reason = reason.queue_full
-            end
+            result, failureReason = private.turn(step.f)
         end
 
         -- Done, we reached this waypoint so we can remove it from the list.
@@ -2020,7 +2142,7 @@ function private.navigate()
     private.unwrapStartup()
 
     -- And we're done.
-    return result, reason
+    return result, failureReason
 end
 
 --[[
