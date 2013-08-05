@@ -597,6 +597,7 @@ function refuel(count)
     private.save("fuel")
     local result = private.waitForResponse(id)
     state.fuel.id = nil
+    state.fuel.current = turtle.getFuelLevel()
     private.save("fuel")
     return result
 end
