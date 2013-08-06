@@ -1976,12 +1976,19 @@ function private.move(direction, tries, aggressive)
                     -- It's a turtle. Just wait for a bit to allow it to move
                     -- out of the way.
                     os.sleep(2)
-                elseif dig and not dig() then
+                elseif dig and not dig() and
+                       -- Stop when we run out of tries or if we have infinite
+                       -- tries (because we'd block indefinitely in that case).
+                       (tries == 1 or tries == math.huge)
+                then
                     -- Some block we can't dig, so there's nothing we can do.
                     private.endMove()
                     return false, reason.unbreakable_block
                 end
-            elseif aggressive and attack and not attack() then
+            elseif aggressive and attack and not attack() and
+                   -- Unlike for unbreakable blocks, we'll keep trying even if
+                   -- we have infinite tries, because entities might just move.
+                   tries == 1 then
                 -- Not a block but nothing we can/may attack. Abort.
                 private.endMove()
                 return false, reason.invulnerable_entity
