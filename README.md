@@ -101,9 +101,9 @@ Movement
     Replacement for `turtle.up()`.
 * `lama.down(tries, aggressive) -> boolean, lama.reason`  
     Replacement for `turtle.down()`.
-* `lama.moveto(x, y, z, facing, tries, aggressive) -> boolean, lama.reason`  
+* `lama.moveto(x, y, z, facing, tries, aggressive, longestFirst) -> boolean, lama.reason`  
     Makes the turtle move to the specified coordinates or waypoint. Will continue across reboots.
-* `lama.navigate(path, tries, aggressive) -> boolean, lama.reason`  
+* `lama.navigate(path, tries, aggressive, longestFirst) -> boolean, lama.reason`  
     Makes the turtle move along the specified path of coordinates and/or waypoints. Will continue across reboots.
 
 The parameters `tries` and `aggressive` for the movement functions do the following: if `tries` is specified, the turtle will try as many times to remove any obstruction it runs into before failing. If `aggressive` is true in addition to that, the turtle will not only try to dig out blocks but also attack entities that stand in its way.
@@ -124,6 +124,14 @@ Rotation
 
 Note that all turning functions behave like the original ones in that they return immediately if they fail (they can only fail if the VM's event queue is full). Otherwise they're guaranteed to complete the operation successfully. For `lama.turn()` and `lama.turnAround()` it is possible that one of two needed turn commands has already been issued, when failing. The internal state will represent that however, i.e. `lama.getFacing()` will still be correct.
 
+Refueling
+--------
+
+* `lama.refuel(count) -> boolean`  
+    Replacement for `turtle.refuel()`.
+
+This has to be called instead of `turtle.refuel()` to ensure the API's state validity, since it uses the fuel level to check if it's in an unexpected state after rebooting. It is is otherwise functionally equivalent to `turtle.refuel()`.
+
 Waypoints
 ---------
 
@@ -139,7 +147,7 @@ In some cases it may be easier (and more readable) to send your turtles to prede
     Returns the coordinates of the specified waypoint.
 * `lama.waypoint.iter() -> function`  
     Returns an iterator function over all known waypoints.
-* `lama.waypoint.moveto(name, tries, aggressive) -> boolean, lama.reason`  
+* `lama.waypoint.moveto(name, tries, aggressive, longestFirst) -> boolean, lama.reason`  
     This is like `lama.moveto()` except that it takes a waypoint as the target.
 
 Note that waypoints *may* have a facing associated with them, but don't have to. This means that if a waypoint has a facing and the turtle is ordered to move to it, it will rotate into that direction, if it does not the turtle will remain with the orientation in which it arrived at the waypoint.
@@ -192,6 +200,13 @@ Still, this is software, and testing is a tricky business, so it's very possible
 
 Changelog
 =========
+
+- Version 1.4
+  - **Important:** from now on you must use `lama.refuel()` instead of `turtle.refuel()`.
+  - Extended state validation to cases when the turtle isn't moving. This is achieved by also replacing `turtle.refuel()` and comparing the command ID we got from that to a newly generated one during initialization, where we'd expect a higher one. There's a slight chance for this to fail if a rollback only went back a couple of ticks. But if the game crashes so hard it can't save anymore it usually involves a lot more rollback.
+  - When the API enters an invalid state (command ID indicating rollback or fuel level mismatch) it will now lock down and throw errors whenever any function other than `lama.set()` is called. This is to avoid turtles running amok when they don't know where they are. They'll just stay put until reinitialized by the player.
+  - Added parameter to `lama.moveto()`, `lama.navigate()` and `lama.waypoint.moveto()` that can be used to tell the turtle to move along the short (default) or long axes first. For example: when going from (0, 0, 0) to (3, 1, 0) the first axis would be the long axis, the second the short one. This gives more control over which areas turtles will avoid when moving.
+  - Went back to blocking when encountering invulnerable entities (sorry). This is to avoid having to use constructs like `repeat until lama.moveto(x, y, z, f, math.huge, true, true --[[ longest axis first ]])` to cover players blocking turtles, and turtles changing paths in such cases.
 
 - Version 1.3
   - **Important:** Changed / introduced folder structure. The API is now in an `apis` folder and the programs (`lama-conf`) in a `programs` folder. This breaks the old installer on pastebin, get the new one if you plan on using it, please. You'll also have to either move the files or adjust your `os.loadAPI` paths. Sorry for the inconvenience.

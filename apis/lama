@@ -196,7 +196,8 @@ end
     @return the turtle's current X position.
 ]]
 function getX()
-    return select(1, get())
+    local x, _, _, _ = get()
+    return x
 end
 
 --[[
@@ -205,7 +206,8 @@ end
     @return the turtle's current Y position.
 ]]
 function getY()
-    return select(2, get())
+    local _, y, _, _ = get()
+    return y
 end
 
 --[[
@@ -214,7 +216,8 @@ end
     @return the turtle's current Z position.
 ]]
 function getZ()
-    return select(3, get())
+    local _, _, z, _ = get()
+    return z
 end
 
 --[[
@@ -233,7 +236,8 @@ end
     @see lama.side
 ]]
 function getFacing()
-    return select(4, get())
+    local _, _, _, f = get()
+    return f
 end
 
 --[[
@@ -847,13 +851,13 @@ function hijackTurtleAPI(restore)
             turnLeft  = turtle.turnLeft,
             refuel    = turtle.refuel
         }
-        turtle.forward   = function() return select(1, forward()) end
-        turtle.back      = function() return select(1, back()) end
-        turtle.up        = function() return select(1, up()) end
-        turtle.down      = function() return select(1, down()) end
-        turtle.turnRight = function() return select(1, turnRight()) end
-        turtle.turnLeft  = function() return select(1, turnLeft()) end
-        turtle.refuel    = function() return select(1, refuel()) end
+        turtle.forward   = function() return forward() ~= false end
+        turtle.back      = function() return back() ~= false end
+        turtle.up        = function() return up() ~= false end
+        turtle.down      = function() return down() ~= false end
+        turtle.turnRight = function() return turnRight() ~= false end
+        turtle.turnLeft  = function() return turnLeft() ~= false end
+        turtle.refuel    = function() return refuel() ~= false end
     end
 end
 
