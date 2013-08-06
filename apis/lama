@@ -2126,48 +2126,82 @@ function private.navigate()
     -- turning) so that we still resume moving.
     private.wrapStartup()
 
-    -- Process all remaining waypoints.
-    local result, failureReason
-    local comparator
-    if state.path.longestFirst then
-        comparator = function(a, b)
-                         return math.abs(a.distance) > math.abs(b.distance)
-                     end
-    else
-        comparator = function(a, b)
-                         return math.abs(a.distance) < math.abs(b.distance)
-                     end
+    -- Used for determining which way to go first.
+    local function shortestFirstComparator(a, b)
+        return math.abs(a.distance) < math.abs(b.distance)
     end
-    repeat 
+    local function longestFirstComparator(a, b)
+        return math.abs(a.distance) > math.abs(b.distance)
+    end
+
+    -- Process all remaining waypoints.
+    local result, failureReason = true
+    local comparator = state.path.longestFirst and
+                       longestFirstComparator or
+                       shortestFirstComparator
+    repeat
         -- Figure out how far we have to move along each axis.
         local position = state.position
         local x, y, z = position.x, position.y, position.z, position.f
         local step = state.path.steps[1]
         local dx, dy, dz = step.x - x, step.y - y, step.z - z
+        local axisCount = (dx ~= 0 and 1 or 0) +
+                          (dy ~= 0 and 1 or 0) +
+                          (dz ~= 0 and 1 or 0)
 
-        -- Then move that distance along each axis. Move the shorter distances
-        -- first.
-        local axes = {{axis = "x", distance = dx},
-                      {axis = "y", distance = dy},
-                      {axis = "z", distance = dz}}
-        table.sort(axes, comparator)
-        for _, entry in ipairs(axes) do
-            result, failureReason = travel(entry.axis, entry.distance)
-            if not result then
-                break
+        -- If we move along several axes and should move along the longest axis
+        -- first, we split the move into several moves, one for each axis. This
+        -- is to ensure that we move the same way even if we're interrupted. If
+        -- we didn't do this and we were to be interrupted while moving along
+        -- the longest axis, it could become shorter than one of the other axes
+        -- and thus lead to us suddenly changing direction. We do this on the
+        -- fly instead of once in the beginning to keep the state file small.
+        if state.path.longestFirst and axisCount > 1 then
+            -- Build the one (or two) intermediate points.
+            local axes = {{axis = 1, distance = dx},
+                          {axis = 2, distance = dy},
+                          {axis = 3, distance = dz}}
+            table.sort(axes, shortestFirstComparator)
+            local stopover = {step.x, step.y, step.z}
+            for _, entry in ipairs(axes) do
+                stopover[entry.axis] = stopover[entry.axis] - entry.distance
+                if stopover[1] == 0 and
+                   stopover[2] == 0 and
+                   stopover[3] == 0
+                then
+                    break
+                end
+                -- Copy it so as not to change ones we already inserted and to
+                -- get it in the right format (named keys).
+                local stopoverCopy = {x = stopover[1],
+                                      y = stopover[2],
+                                      z = stopover[3]}
+                table.insert(state.path.steps, 1, stopoverCopy)
             end
-        end
-
-        -- Finally, adjust our facing.
-        if result and step.f ~= nil then
-            if useMinecraftCoordinates then
-                step.f = (step.f + 2) % 4
+        else
+            -- Then move that distance along each axis.
+            local axes = {{axis = "x", distance = dx},
+                          {axis = "y", distance = dy},
+                          {axis = "z", distance = dz}}
+            table.sort(axes, comparator)
+            for _, entry in ipairs(axes) do
+                result, failureReason = travel(entry.axis, entry.distance)
+                if not result then
+                    break
+                end
             end
-            result, failureReason = private.turn(step.f)
-        end
 
-        -- Done, we reached this waypoint so we can remove it from the list.
-        table.remove(state.path.steps, 1)
+            -- Finally, adjust our facing.
+            if result and step.f ~= nil then
+                if useMinecraftCoordinates then
+                    step.f = (step.f + 2) % 4
+                end
+                result, failureReason = private.turn(step.f)
+            end
+
+            -- Done, we reached this waypoint so we can remove it from the list.
+            table.remove(state.path.steps, 1)
+        end
         private.save("path")
     until not result or #state.path.steps == 0
 
