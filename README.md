@@ -1,7 +1,7 @@
 [LAMA - Location Aware Movement API][forum post]
 ====================================
 
-This API provides *persistent* position and facing awareness for [ComputerCraft][] [turtles][]. You can query a turtle's position and facing at any time, and it will not 'desynchronize' if the turtle is unloaded (game quit / chunk unloaded) while it moves. To achieve this, it offers replacements for the default turtle movement functions, i.e. for `turtle.forward()`, `turtle.back()`, `turtle.up()`, `turtle.down()`, `turtle.turnLeft()` and `turtle.turnRight()`. It also provides a few more high level movement functions to travel multiple blocks, as well as a waypoint system to store coordinates and refer to them by name.
+This API provides *persistent* position and facing awareness for [ComputerCraft][] [turtles][]. You can query a turtle's position and facing at any time, and it will not 'desynchronize' if the turtle is unloaded (game quit / chunk unloaded) while it moves. To achieve this, it offers replacements for the default turtle movement functions, i.e. for `turtle.forward()`, `turtle.back()`, `turtle.up()`, `turtle.down()`, `turtle.turnLeft()` and `turtle.turnRight()`, as well as one for refueling, i.e. for `turtle.refuel()`. It also provides a few more high level movement functions to travel multiple blocks, as well as a waypoint system to store coordinates and refer to them by name.
 
 With this API you can write *resumable* programs that make decisions based on the turtle's position. For example, saving the following program as the `startup` file will make the turtle run in circles until it runs out of fuel (precondition: turtle starts at `x = 0, y = 0`). It will not leave its track even if the turtle is forcibly shut down at any point.
 
@@ -27,7 +27,7 @@ Requirements
 
 This API only works on turtles that have an ID and that use fuel. The ID is required for state persistence, the fuel is used for checking whether the turtle finished a move that was interrupted by a forced shut down (game quit / chunk unloaded).
 
-**Important:** when using this API, you *must not* use any of the original movement related functions, since that would invalidate the API's internal state (coordinates would no longer match). Always use the functions of this API to move the turtle. You can use `lama.hijackTurtleAPI()` to have the functions in the turtle API replaced with wrappers for this API's functions. The native functions won't be touched; don't use them either way.
+**Important:** when using this API, you *must not* use any of the original movement related functions, since that would invalidate the API's internal state (coordinates would no longer match), neither the original refuel function, which would also invalidate the state. Always use the functions of this API to move and refuel the turtle. You can use `lama.hijackTurtleAPI()` to have the functions in the turtle API replaced with wrappers for this API's functions. The native functions won't be touched; don't use them either way.
 
 Recommended
 -----------
