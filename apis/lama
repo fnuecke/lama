@@ -983,7 +983,7 @@ private.schema[version] = {
                 value = function(v) return private.direction[v] ~= nil end
             },
             tries = {type = "number", value = private.isInteger},
-            aggressive = {type = "boolean"}
+            aggressive = {type = "boolean", optional = true}
         }
     },
     path = {
@@ -1773,25 +1773,23 @@ function private.tryGetReason(direction)
         [private.direction.forward] = "front",
         [private.direction.up]      = "top",
         [private.direction.down]    = "bottom"})[direction]
-    if detect then
+
+    -- Check for turtles first, because it's non-yielding.
+    if peripheral.getType(sideName) == "turtle" then
+        -- A turtle is blocking us.
+        return reason.turtle
+    elseif detect then
         if detect() then
-            if peripheral.isPresent(sideName) and
-               peripheral.getType(sideName) == "turtle"
-            then
-                -- A turtle is blocking us.
-                return reason.turtle
-            else
-                -- Some other block is in our way.
-                return reason.block
-            end
+            -- Some other block is in our way.
+            return reason.block
         else
             -- Not a block, so we can assume it's some entity.
             return reason.entity
         end
+    else
+        -- Cannot determine what's blocking us.
+        return reason.unknown
     end
-
-    -- Cannot determine what's blocking us.
-    return reason.unknown
 end
 
 --[[
@@ -1903,7 +1901,7 @@ function private.move(direction, tries, aggressive)
 
     -- Clean up arguments.
     tries = tonumber(tries or 0)
-    aggressive = aggressive and true or false
+    aggressive = aggressive and true or nil
 
     -- Mapping for functions based on movement direction.
     local move = ({
@@ -1928,97 +1926,111 @@ function private.move(direction, tries, aggressive)
         [private.direction.up]      = "top",
         [private.direction.down]    = "bottom"})[direction]
 
+    -- Set up our move state. This is cleared if we fail for any reason, and
+    -- only saved to disk if we actually start moving.
+    state.move = {
+        direction = direction,
+        tries = tries,
+        aggressive = aggressive
+    }
+
     -- Try to move until we're out of tries (or successful).
-    local success
-    repeat
-        -- Initialize the move by calling the native function. Store the fuel
-        -- level before the command to allow testing for a successful move in
-        -- case we are interrupted by a server quit / chunk unload while
-        -- waiting for the move to finish.
-        local moveId = move()
-        if moveId == -1 then
-            -- Too many events queued already.
-            private.endMove()
-            return false, reason.queue_full
-        end
-        state.move = {
-            direction = direction,
-            tries = tries,
-            aggressive = aggressive
-        }
-        private.save("move")
+    while true do
+        -- Check if there's a turtle in our way. We do this first because it's
+        -- non-yielding. If we didn't there's a very (very!) tiny chance for a
+        -- turtle to block us but move away in the same tick, leading us to
+        -- wrongly believe what blocked us was actually an invulnerable entity.
+        if peripheral.getType(side) == "turtle" then
+            -- There really is a turtle in our way. Reuse failure handling
+            -- logic from below and just save the move state. Don't waste I/O.
+            if state.move.tries > 0 then
+                private.save("move")
+            end
+        else
+            -- Initialize the move by calling the native function.
+            local moveId = move()
+            if moveId == -1 then
+                private.endMove()
+                return false, reason.queue_full
+            end
+            private.save("move")
 
-        -- Setup movement resumption via startup file and save state to disk.
-        private.wrapStartup()
+            -- Wait for the result while having our startup file active.
+            private.wrapStartup()
+            local success = private.waitForResponse(moveId)
+            private.unwrapStartup()
 
-        -- Wait for movement to finish.
-        success = private.waitForResponse(moveId)
-
-        -- Restore startup file after we're done. We do this each time, which
-        -- causes a bit more file i/o, but there are way too many sleeps in the
-        -- following to guarantee a clean state otherwise.
-        private.unwrapStartup()
-
-        -- Update state and flush it to disk if we actually moved.
-        if success then
-            private.updateState()
+            -- Update state and flush it to disk if we actually moved.
+            if success then
+                private.updateState()
+                private.endMove()
+                return true
+            end
         end
 
         -- If something went wrong check whether we should try again.
-        if not success then
-            if tries == 0 then
-                -- We're out of tries.
-                break
-            end
+        if state.move.tries == 0 then
+            private.endMove()
+            return false, private.tryGetReason(direction)
+        end
 
-            -- See what seems to be blocking us.
-            if detect and detect() then
-                -- Its a block, see if it's a turtle, otherwise try to hit it.
-                if peripheral.isPresent(side) and
-                   peripheral.getType(side) == "turtle"
-                then
-                    -- It's a turtle. Just wait for a bit to allow it to move
-                    -- out of the way.
-                    os.sleep(2)
-                elseif dig and not dig() and
-                       -- Stop when we run out of tries or if we have infinite
-                       -- tries (because we'd block indefinitely in that case).
-                       (tries == 1 or tries == math.huge)
-                then
-                    -- Some block we can't dig, so there's nothing we can do.
-                    private.endMove()
-                    return false, reason.unbreakable_block
-                end
-            elseif aggressive and attack and not attack() and
-                   -- Unlike for unbreakable blocks, we'll keep trying even if
-                   -- we have infinite tries, because entities might just move.
-                   tries == 1 then
-                -- Not a block but nothing we can/may attack. Abort.
+        -- See what seems to be blocking us. We do a peripheral check after
+        -- each yielding function because I'm pretty sure that turtles can move
+        -- into our way inbetween those yielding calls, which could lead us to
+        -- believe that there's an indestructible block or invulnerable entity
+        -- in front of us, not a turtle.
+        -- This might actually happen with *any* moving... thing. Turtles are
+        -- just the most likely, and really the only thing we can properly
+        -- check for, so... yeah.
+        if peripheral.getType(side) == "turtle" then
+            -- It's a turtle. Wait and hope it goes away.
+            os.sleep(1)
+        elseif dig and dig() then
+            -- We got rid of some block in our way. Wait a little to allow
+            -- sand/gravel to drop down. I've had cases where the turtle
+            -- would get into a weird state in which it moved below a
+            -- dropping sand block, causing bad behavior.
+            os.sleep(0.5)
+        elseif peripheral.getType(side) == "turtle" then
+            -- A turtle moved in while we dug... more waiting...
+            os.sleep(1)
+        elseif aggressive and attack and attack() then
+            -- We successfully attacked something. Try again immediately!
+        elseif peripheral.getType(side) == "turtle" then
+            -- A turtle moved in while we attacked! Wait for it to leave.
+            os.sleep(1)
+        elseif detect then
+            -- See if we can try to detect something.
+            local block = detect()
+            if peripheral.getType(side) == "turtle" then
+                -- A turtle moved in... you know the deal.
+                os.sleep(1)
+            elseif block then
+                -- Some block we can't dig. Stop right here, there's
+                -- nothing we can do about it. Well, in theory it might
+                -- go away due to it being moved by a frame/carriage,
+                -- but we really don't want to count on that...
                 private.endMove()
-                return false, reason.invulnerable_entity
+                return false, reason.unbreakable_block
             else
-                -- We cannot do anything about the obstruction, just wait for a
-                -- bit, maybe it'll pass.
+                -- Not a block but nothing we can/may attack. Unlike
+                -- for unbreakable blocks, we'll keep trying even if
+                -- we have infinite tries, because entities might just
+                -- move.
+                if state.move.tries == 1 then
+                    private.endMove()
+                    return false, reason.invulnerable_entity
+                end
                 os.sleep(1)
             end
-            -- We either destroyed a block, attacked something, or did nothing!
-            -- Let's try again. Doin' it right. Dat bass.
-            tries = tries - 1
-            -- Wait a little to allow sand/gravel to drop down. I've had cases
-            -- where the turtle would get into a weird state in which it moved
-            -- below a dropping sand block, causing bad behavior.
+        else
+            -- We cannot determine what's in our way. Keep going until
+            -- we're out of tries...
             os.sleep(0.5)
         end
-    until success
 
-    -- Clean up.
-    private.endMove()
-
-    -- Return if we're successful, and when not, for what reason.
-    if success then
-        return true
-    else
-        return false, private.tryGetReason(direction)
+        -- Let's try again. Doin' it right. Dat bass.
+        state.move.tries = state.move.tries - 1
     end
 end
 
