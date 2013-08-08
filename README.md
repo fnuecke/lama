@@ -201,6 +201,9 @@ Still, this is software, and testing is a tricky business, so it's very possible
 Changelog
 =========
 
+- Version 1.4a
+  - Improvements on turtles' awareness of each other. Previously turtles may have (with a very, very small chance) moved into and/or out of the way of other turtles in such a way that the blocked turtle may have wrongly diagnosed the reason for its movement failure. This should not happen anymore.
+
 - Version 1.4
   - **Important:** from now on you must use `lama.refuel()` instead of `turtle.refuel()`.
   - Extended state validation to cases when the turtle isn't moving. This is achieved by also replacing `turtle.refuel()` and comparing the command ID we got from that to a newly generated one during initialization, where we'd expect a higher one. There's a slight chance for this to fail if a rollback only went back a couple of ticks. But if the game crashes so hard it can't save anymore it usually involves a lot more rollback.

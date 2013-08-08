@@ -111,7 +111,7 @@ local state, private
 -------------------------------------------------------------------------------
 
 -- The current version of the API.
-version = "1.4"
+version = "1.4a"
 
 -- Constants for a turtle's facing, used for turn() and get()/set(). Note that
 -- these are adjusted in the initialization of the API if the setting
