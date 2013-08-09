@@ -9,13 +9,13 @@ With this API you can write *resumable* programs that make decisions based on th
 os.loadAPI("lama")
 while true do
     local x, y, z = lama.get()
-    if x == 0 and y == 0 then
+    if x == 0 and z == 0 then
         lama.turn(lama.side.north)
-    elseif x == 2 and y == 0 then
+    elseif x == 0 and z == -2 then
         lama.turn(lama.side.east)
-    elseif x == 2 and y == 2 then
+    elseif x == 2 and z == -2 then
         lama.turn(lama.side.south)
-    elseif x == 0 and y == 2 then
+    elseif x == 2 and z == 0 then
         lama.turn(lama.side.west)
     end
     lama.forward(math.huge) -- Keep trying.
@@ -200,6 +200,9 @@ Still, this is software, and testing is a tricky business, so it's very possible
 
 Changelog
 =========
+
+- Version 1.4b
+  - Fixed potential infinite loop in path resolver for longest path first multiblock movement.
 
 - Version 1.4a
   - Improvements on turtles' awareness of each other. Previously turtles may have (with a very, very small chance) moved into and/or out of the way of other turtles in such a way that the blocked turtle may have wrongly diagnosed the reason for its movement failure. This should not happen anymore.

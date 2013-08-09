@@ -111,7 +111,7 @@ local state, private
 -------------------------------------------------------------------------------
 
 -- The current version of the API.
-version = "1.4a"
+version = "1.4b"
 
 -- Constants for a turtle's facing, used for turn() and get()/set(). Note that
 -- these are adjusted in the initialization of the API if the setting
@@ -2188,9 +2188,9 @@ function private.navigate()
             local stopover = {step.x, step.y, step.z}
             for _, entry in ipairs(axes) do
                 stopover[entry.axis] = stopover[entry.axis] - entry.distance
-                if stopover[1] == 0 and
-                   stopover[2] == 0 and
-                   stopover[3] == 0
+                if stopover[1] == x and
+                   stopover[2] == y and
+                   stopover[3] == z
                 then
                     break
                 end
