@@ -55,7 +55,7 @@ Alternatively you can install the API via cc-get:
 
 This includes only `lama-conf`, but *not* the example program. Note that you will have to use `os.loadAPI("/bin/lama-lib/lama")` in this case (in particular, you'll have to adjust that call in the example program).
 
-In both cases you will get the [minified version](lama-min), which is roughly only 30% the size of the [original version](lama). The minified version was generated using [luamin][]. I just slightly modified it so that all variable names are kept, in particular so that config variables are left in a readable state.
+In both cases you will get a minified version, which is roughly only a third the size of the [original version](lama). Note the the custom installer will provide you with the option to download the full source version, too.
 
 API
 ===
@@ -254,6 +254,5 @@ This API is licensed under the [MIT License][license], which basically means you
 [forum post]: http://www.computercraft.info/forums2/index.php?/topic/13919-api-lama-location-aware-movement-api/
 [jam]: https://github.com/fnuecke/ccapis/blob/master/programs/jam
 [license]: http://opensource.org/licenses/mit-license.php
-[luamin]: https://github.com/mathiasbynens/luamin
 [startup]: https://github.com/fnuecke/ccapis
 [turtles]: http://www.computercraft.info/wiki/Turtle
