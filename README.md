@@ -202,7 +202,7 @@ Changelog
 =========
 
 - Version 1.4c
-  - Fixed lama.back().
+  - Fixed `lama.back()`.
 
 - Version 1.4b
   - Fixed potential infinite loop in path resolver for longest path first multiblock movement.
