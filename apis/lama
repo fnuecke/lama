@@ -83,7 +83,7 @@ local startupBackupFile = "/.lama-startup-backup"
 -- Whether to use the same coordinate system Minecraft uses internally. This
 -- only influences how the API works from the outside; the state file will
 -- always use the internal coordinate system, to provide compatibility.
-local useMinecraftCoordinates = true
+local useMinecraftCoordinates = false
 
 -------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
@@ -111,7 +111,7 @@ local state, private
 -------------------------------------------------------------------------------
 
 -- The current version of the API.
-version = "1.4b"
+version = "1.4c"
 
 -- Constants for a turtle's facing, used for turn() and get()/set(). Note that
 -- these are adjusted in the initialization of the API if the setting
@@ -1923,6 +1923,7 @@ function private.move(direction, tries, aggressive)
         [private.direction.down]    = turtle.attackDown})[direction]
     local side = ({
         [private.direction.forward] = "front",
+        [private.direction.back]    = "back",
         [private.direction.up]      = "top",
         [private.direction.down]    = "bottom"})[direction]
 
