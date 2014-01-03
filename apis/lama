@@ -1557,6 +1557,45 @@ function private.resume(dontCrash)
         error("Invalid state. Please reinitialize the turtle's position.")
     end
 
+    -------------------------------------------------------------------------------
+    -- Environment checking                                                      --
+    -------------------------------------------------------------------------------
+
+    -- MT: Moved assertions here from end of API file because assert failures were
+    --     preventing the API from loading when stored in ROM (e.g. when included in a
+    --     resource pack
+
+    assert(turtle, "The lama API can only run on turtles.")
+    assert(os.getComputerLabel(), "Turtle has no label, required for state persistence.")
+    assert(turtle.getFuelLevel() ~= "unlimited", "Turtles must use fuel for this API to work correctly.")
+
+    if bapil then
+        apiPath = bapil.resolveAPI(apiPath)
+    else
+        -- MT: Allow locally installed versions on each turtle to override the ROM version
+        local i
+        local tryPaths =    {
+                                "/rom/apis/lama",
+                                "/rom/apis/turtle/lama",
+                                "/apis/lama",
+                                "/apis/turtle/lama"
+                            }
+        for i  = 1 , #tryPaths do
+            if fs.exists(tryPaths[i]) and not fs.isDir(tryPaths[i]) then
+                apiPath = tryPaths[i]
+            end
+        end
+    end
+    
+    -- MT: Re-set startupScript to include the chosen apiPath
+    startupScript = string.format(
+[[assert(os.loadAPI(%q))
+lama.init()
+lama.hijackTurtleAPI()]], apiPath)
+        
+    assert(type(apiPath) == "string" and apiPath ~= "", "The setting 'apiPath' must be a non-empty string.")
+    assert(fs.exists(apiPath) and not fs.isDir(apiPath), "No file found at 'apiPath', please make sure it points to the lama API.")
+    
     -- Thread safety: engaged!
     state.isInitializing = true
 
@@ -2255,27 +2294,5 @@ end
 -- Environment checking                                                      --
 -------------------------------------------------------------------------------
 
--- This API makes no sense when used on anything other than a turtle.
-assert(turtle, "Can only run on turtles.")
-
--- Check if this computer has a label. Because if it hasn't this is pointless.
-assert(os.getComputerLabel(),
-    "Turtle has no label, required for state persistence.")
-
--- Check if turtles use fuel. If they don't, we cannot reliably check if the
--- turtle moved after it was forcibly shut down.
-assert(turtle.getFuelLevel() ~= "unlimited",
-    "Turtles must use fuel for this API to work correctly.")
-
--- Make sure the apiPath variable is set.
-assert(type(apiPath) == "string" and apiPath ~= "",
-    "The setting 'apiPath' must be a non-empty string.")
-
--- Make sure the apiPath variable is plausible. This also sets it to the
--- correct absolute path for our startup handlers (in case BAPIL isn't loaded
--- at the time they run).
-if bapil then
-    apiPath = bapil.resolveAPI(apiPath)
-end
-assert(fs.exists(apiPath) and not fs.isDir(apiPath),
-    "No file found at 'apiPath', please make sure it points to the API.")
+-- MT: Environment checking moved to the private.resume() method because assert failures were
+--     preventing the API from loading when stored in ROM (e.g. when included in a resource pack
