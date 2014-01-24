@@ -83,7 +83,7 @@ local startupBackupFile = "/.lama-startup-backup"
 -- Whether to use the same coordinate system Minecraft uses internally. This
 -- only influences how the API works from the outside; the state file will
 -- always use the internal coordinate system, to provide compatibility.
-local useMinecraftCoordinates = false
+local useMinecraftCoordinates = true
 
 -------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
